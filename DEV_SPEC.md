@@ -1,0 +1,1227 @@
+# ITFlow Developer Specification
+
+**Audience: human contributors and AI coding agents.**
+**Scope: everything you need to make a correct change to this codebase without reading it end to end.**
+
+`CONTRIBUTING.md` is the rulebook — what you must and must not do, and why. This document is the
+*map and the mechanics*: what exists, where it lives, what it is wired to, and the exact shape of
+the code you are expected to write. Where the two overlap, `CONTRIBUTING.md` wins on policy and
+this document wins on detail.
+
+---
+
+## 0. How to use this document
+
+**If you are a human:** read §1–§6 once. Then use §9 (Recipes) as a working reference and §11
+(Never do this) as a pre-commit check.
+
+**If you are an AI agent:** this document is written to be your working context. Follow this order:
+
+1. Read §3 (Repository map) to locate the files your task touches.
+2. Read §5 (Bootstrap contract) — most "missing variable" mistakes are a variable that already exists.
+3. Read §6 (Security model). Every rule there is load-bearing; there is no framework catching you.
+4. Find the recipe in §9 that matches your task and follow it literally.
+5. Before finishing, walk §10 (Definition of done) and §11 (Never do this).
+
+**The single most important instruction for both audiences:** this project has no ORM, no
+templating engine, no request router, and no automated test suite. Safety is a property of
+*convention adherence at every call site*, not of infrastructure. When in doubt, **find the nearest
+existing example of what you are building and copy its structure exactly** — then understand every
+line you copied. Novelty is a defect here.
+
+---
+
+## 1. Fact sheet
+
+| Property | Value |
+|---|---|
+| Product | ITFlow — documentation, ticketing and accounting platform for small MSPs |
+| App version | `26.08` (`includes/app_version.php`, constant `APP_VERSION`, format `YY.MM[.v]`) |
+| Language | PHP, procedural, no framework |
+| Minimum PHP | **8.2** (checked in `setup/index.php` and `admin/debug.php`) |
+| Database | MySQL / MariaDB via **`mysqli`** (procedural API), InnoDB, `utf8mb4_general_ci` |
+| Web server | Apache + PHP (`.htaccess` files are load-bearing — see §6.8) |
+| Front end | Bootstrap 4 + AdminLTE 3, jQuery, DataTables, Select2, TinyMCE, Chart.js, FullCalendar |
+| Build step | **None.** No Composer install, no npm install, no bundler, no transpiler |
+| Dependencies | Vendored byte-for-byte in `libs/` (including `libs/vendor/`, which is committed). Never add a runtime package manager dependency |
+| Tables | 138 (`db.sql`) |
+| Migrations | 66 (`admin/database_updates/`), current DB version `2.6.6` |
+| PHP files | ~778 excluding `libs/` |
+| Agent POST handlers | 58 (`agent/post/`) · Admin: 48 (`admin/post/`) |
+| Agent modals | 226 (`agent/modals/`) |
+| API endpoints | 41 (`api/v1/`) |
+| CI | GitHub Actions: PHP lint on every PR, `db.sql` import lint when `db.sql` changes, SonarCloud |
+| Tests | **No automated test suite.** Verification is manual against a real install |
+| License | GPL |
+| Style | 4-space indent, LF, UTF-8, English — enforced by `.editorconfig` / `.gitattributes` |
+
+### 1.1 Design philosophy (why it looks like this)
+
+ITFlow is deliberately "unzip and go". A user with a LAMP box and a zip file must get a working
+install with no toolchain. That constraint produces every architectural decision below:
+
+- **No framework** → the request lifecycle is `require` chains you can read top to bottom.
+- **No ORM** → SQL is built as strings, so **every interpolated value must be neutralized by the
+  caller** (§6.1). This is the project's central trade-off and its most common defect class.
+- **No build step** → assets ship as-is; `libs/` is updated wholesale, never edited.
+- **No package manager** → new third-party code gets vendored, and only after discussion.
+
+Roadmap direction is *incremental modernization of the existing PHP*. Rewrites, framework
+introductions, and new runtime dependencies are out of scope and will be declined.
+
+---
+
+## 2. Environment and installation
+
+### 2.1 Development setup
+
+```
+1. Clone into an Apache/PHP 8.2+ webroot with the mysqli extension available.
+2. Create an empty MySQL/MariaDB database.
+3. Browse to /setup/ (or import db.sql directly and configure by hand).
+4. config.php is generated at the repo root. It is gitignored and never committed.
+```
+
+There is no `composer install` and no `npm install` step — `libs/` (including `libs/vendor/`) is
+committed and shipped as-is. If a proposed change requires a contributor or an end user to run a
+package manager, the change is wrong.
+
+CLI equivalents live in `scripts/` (web access to that directory is denied by `.htaccess`):
+
+| Script | Purpose |
+|---|---|
+| `scripts/setup_cli.php` | Non-interactive first install |
+| `scripts/update_cli.php` | File + database update (`--update_db` runs migrations) |
+| `scripts/restore_cli.php` | Restore an encrypted backup archive |
+
+### 2.2 `config.php` — the only file-based configuration
+
+Generated by setup, appended to over time, **never in git**. Contents:
+
+| Variable | Written by | Meaning |
+|---|---|---|
+| `$dbhost`, `$dbusername`, `$dbpassword`, `$database` | setup | Connection credentials |
+| `$mysqli` | setup | The live connection handle used by the entire app |
+| `$config_app_name` | setup | `'ITFlow'` |
+| `$config_base_url` | setup | Host + path, no protocol (used to build links in email) |
+| `$config_https_only` | setup | `TRUE` ⇒ secure cookies; falsy downgrades cookie flags |
+| `$repo_branch` | setup | Git branch the self-updater tracks (default `master`) |
+| `$installation_id` | setup | Anonymous install identifier |
+| `$config_enable_setup` | setup, on completion | `0` closes the installer. Absence is treated as "setup open" **only** when the install is not already live (see §6.9) |
+| `$config_backup_key` | `backupEncryptionKey()`, on first backup | AES key for backup archives. **Never in the database, never in a filename.** Losing it makes every archive unrecoverable |
+| `$config_backup_path` | manual | Optional backup storage directory override |
+| `CONST_GET_IP_METHOD` | manual | `HTTP_X_FORWARDED_FOR` or `HTTP_CF_CONNECTING_IP` when behind a proxy/CDN |
+
+Everything else is configuration *in the database* — the `settings` table, one row, `company_id = 1`,
+columns prefixed `config_*`, loaded into globals by `includes/load_global_settings.php` (§5.2).
+
+---
+
+## 3. Repository map
+
+```
+/                       index.php (portal router), login.php (unified login), functions.php (loader)
+├── agent/              Technician app — most feature work happens here
+│   ├── post/           Write handlers, one file per module (+ *_model.php shared field logic)
+│   ├── modals/<module>/ AJAX-loaded modal forms
+│   ├── includes/       Agent-only include chains and nav
+│   ├── reports/        Financial and operational reports
+│   ├── js/, css/       Agent-only front-end assets
+│   └── user/           Signed-in user's own profile, security, MFA, preferences
+├── admin/              Settings, roles, mail, modules, maintenance. Admin-gated at the dispatcher
+│   ├── post/           Admin write handlers
+│   ├── modals/<module>/ Admin modal forms
+│   └── database_updates/ Sequential migrations, <x.y.z>.php, named for the version they upgrade TO
+├── client/             Client portal — a client's own contacts sign in here
+├── guest/              Unauthenticated URL-key flows (view/pay invoice, view quote/ticket, shares)
+├── api/v1/             Key-authenticated JSON API, one directory per resource
+├── cron/               Scheduled jobs. cron.php is the dispatcher and the only crontab entry
+│   └── includes/       Cron-only helpers (the per-job lock)
+├── functions/          Topical helper files, loaded by /functions.php
+├── includes/           SHARED bootstrap: session, auth, DB, settings, layout partials
+├── post/               SHARED POST handlers (logout, misc)
+├── modals/             SHARED modals (notifications)
+├── js/, css/           SHARED front-end assets
+├── libs/               Vendored third-party code. Never edit. Update wholesale
+├── setup/              First-run installer
+├── scripts/            CLI utilities. Web access denied
+├── uploads/            User content. PHP execution denied by .htaccess
+└── db.sql              Full schema for fresh installs
+```
+
+**Rule of thumb:** root-level `includes/`, `post/`, `modals/`, `js/`, `css/` are shared across
+portals. Anything inside a portal directory belongs to that portal only.
+
+### 3.1 The five portals
+
+| Portal | Who | Auth mechanism | Write path | Permission gate |
+|---|---|---|---|---|
+| `agent/` | Technicians (`user_type = 1`) | Session + `includes/check_login.php` | `agent/post.php` | `enforceUserPermission()` **in each handler block** |
+| `admin/` | Technicians whose role has `role_is_admin = 1` | Same session | `admin/post.php` | Dispatcher only loads `admin/post/*` when `$session_is_admin` — handlers inherit the gate |
+| `client/` | Client contacts (`user_type = 2`) | Session + `client/includes/check_login.php` | `client/post.php` (single file, not a dispatcher) | `enforceContactCan('accounting'\|'contacts'\|'itdoc')` |
+| `guest/` | Nobody signed in | Per-record random URL key (32 chars) in the query string | `guest/guest_post.php` | The key *is* the authorization; validate it on every request |
+| `api/v1/` | Machines | `api_key` in query or JSON body | The endpoint file itself | `api/v1/enforce_api_rbac.php` derives the linked user's RBAC |
+
+### 3.2 `custom/` directories — the supported extension point
+
+`agent/`, `admin/`, `client/`, `guest/`, `cron/`, `scripts/`, `setup/` and `api/v1/` each contain a
+gitignored `custom/` directory for site-specific code that survives updates.
+`triggerCustomAction($trigger, $entity_id)` fires named triggers into
+`custom/custom_action_handler.php` when one exists.
+
+**Core code calls `triggerCustomAction()` at meaningful events; core code never depends on anything
+inside `custom/`.**
+
+---
+
+## 4. Request lifecycle
+
+### 4.1 Read page (`agent/tickets.php`, `agent/reports/profit_loss.php`, …)
+
+```php
+<?php
+require_once "includes/inc_all.php";      // or inc_all_client.php on client-scoped pages
+
+enforceUserPermission('module_support');  // level 1 = read
+
+// ... queries, then HTML
+require_once "../includes/footer.php";
+```
+
+`inc_all.php` loads, in order:
+
+```
+config.php
+functions.php                → loads every file in functions/
+includes/check_login.php     → session_init, setup redirect, auth_check, timezone,
+                               load_user_session, load_company_settings,
+                               load_global_settings, detect_device_type
+includes/page_title.php      → $page_title, $tab_title
+includes/header.php          → <head>, CSS, X-Frame-Options: DENY
+includes/top_nav.php
+includes/get_side_nav_counts.php + side_nav.php
+includes/inc_wrapper.php
+includes/inc_alert_feedback.php   → renders and clears the flash alert
+includes/filter_header.php        → paging, sorting, search, date range, archived filter
+```
+
+`agent/includes/inc_all_client.php` is the client-scoped variant. It additionally enforces
+`module_client`, reads `$_GET['client_id']` into `$client_id` (already `intval()`'d), calls
+`enforceClientAccess()`, loads the client's primary contact and location into `$client_*`,
+`$contact_*`, `$location_*` view variables (all pre-escaped with `escapeHtml()`), and computes
+every `$num_*` badge count and financial summary for the client sidebar.
+
+**If your page "can't find" a variable, check which include chain it uses before adding a query.
+The variable almost certainly already exists.**
+
+### 4.2 Write action
+
+Every state change goes through the portal's `post.php`, which:
+
+1. requires `config.php`, `functions.php`, and the portal's login check;
+2. defines `FROM_POST_HANDLER`;
+3. `require_once`s every file in `post/` **except** `*_model.php`.
+
+Each handler file begins with the guard, then contains independent `if` blocks — one per action:
+
+```php
+<?php
+defined('FROM_POST_HANDLER') || die("Direct file access is not allowed");
+
+if (isset($_POST['edit_ticket_priority'])) {
+
+    validateCSRFToken();                          // 1. CSRF — always first, no argument
+    enforceUserPermission('module_support', 2);   // 2. Module permission (1 read / 2 write / 3 full)
+
+    $ticket_id = intval($_POST['ticket_id']);     // 3. Sanitize every input
+    $priority  = escapeSql($_POST['priority']);
+
+    // 4. Load the record, then scope it
+    $client_id = intval(getFieldById('tickets', $ticket_id, 'ticket_client_id'));
+    if ($client_id) {
+        enforceClientAccess($client_id);          // skip only when the record has no client
+    }
+
+    // 5. Act
+    mysqli_query($mysqli, "UPDATE tickets SET ticket_priority = '$priority' WHERE ticket_id = $ticket_id");
+
+    // 6. Record
+    logAudit('Ticket', 'Edit', "$session_name changed priority to $priority", $client_id, $ticket_id);
+    logTicketHistory($ticket_id, "Priority changed to $priority by $session_name");
+    triggerCustomAction('ticket_edit', $ticket_id);
+
+    // 7. Tell the user and go back
+    flashAlert("Ticket priority updated");
+    redirect();                                   // defaults to HTTP_REFERER
+}
+```
+
+Steps 1, 2, 3 and 4 are mandatory. Steps 6 and 7 are near-universal. **Copy the nearest existing
+block rather than writing this from memory.**
+
+### 4.3 The `_model.php` pattern
+
+When create and edit share more than a couple of fields, the shared field collection and
+sanitization goes in `agent/post/<module>_model.php` and is `require`d by both blocks. Model files
+carry the same `FROM_POST_HANDLER` guard and are excluded from the dispatcher's auto-load, so they
+only ever run via inclusion. Existing examples: `asset_model.php`, `client_model.php`,
+`invoice_model.php`, `contact_model.php`, and 20 more.
+
+### 4.4 Modals (AJAX)
+
+A modal is a PHP file under `<portal>/modals/<module>/` that returns **JSON**, not HTML:
+
+```php
+<?php
+require_once '../../../includes/modal_header.php';   // config + functions + check_login, sets JSON header
+
+enforceUserPermission('module_support', 2);
+
+$ticket_id = intval($_GET['id']);
+// ... fetch the row, assign every field through escapeHtml()/intval() ...
+
+ob_start();
+?>
+<div class="modal-header bg-dark">…</div>
+<form action="post.php" method="post" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+    …
+</form>
+<?php
+require_once '../../../includes/modal_footer.php';   // ob_get_clean() → json_encode(['content' => …])
+```
+
+Triggered from a page by `js/ajax_modal.js`, which binds to `.ajax-modal` and reads
+`data-modal-url` (or `href`) and `data-modal-size`:
+
+```html
+<a class="ajax-modal" data-modal-url="modals/ticket/ticket_edit.php?id=<?= $ticket_id ?>"
+   data-modal-size="lg" href="#"><i class="fa fa-fw fa-edit"></i></a>
+```
+
+> **Critical gotcha.** Modal forms use `action="post.php"`, which the browser resolves against the
+> **page** URL, not the modal's path. A modal living under `admin/modals/` that an agent page opens
+> submits to `agent/post.php` and must be handled by `agent/post/`. If you reuse a modal across
+> portals, every portal that can open it needs a handler accepting the same field set — otherwise
+> fields are silently dropped on one side.
+
+### 4.5 AJAX (non-modal)
+
+`agent/ajax.php` is the JSON sibling of `post.php`: same bootstrap, same `validateCSRFToken()` /
+`enforceUserPermission()` / `enforceClientAccess()` obligations per block, but it echoes JSON
+instead of redirecting. Used for inline saves, SSL certificate fetches, TOTP code display,
+ticket collision detection, and similar.
+
+`guest/guest_ajax.php` is the unauthenticated equivalent and must re-validate the URL key on every
+call.
+
+### 4.6 API request
+
+```
+api/v1/<resource>/<operation>.php
+  → require validate_api_key.php   (parses JSON body into $_POST, validates key, sets $limit/$offset)
+      → require enforce_api_rbac.php  (loads the key's user, enforces module + level + client scope)
+  → require require_get_method.php | require_post_method.php
+  → build and run the query
+  → require read_output.php | create_output.php | update_output.php | delete_output.php
+```
+
+Response envelope: `success` (`"True"`/`"False"`), `message`, `count`, `data`.
+Only GET and POST are accepted — GET reads, POST creates/updates/deletes.
+
+### 4.7 Cron
+
+One crontab entry runs everything:
+
+```
+* * * * * php /path/to/itflow/cron/cron.php >/dev/null
+```
+
+See §7.2 for the full contract. The short version: `cron/cron.php` wakes every minute, consults
+`includes/cron_jobs.php` for *what may run*, consults the `cron_jobs` table for *when and whether*,
+claims each due job with an atomic `UPDATE`, and `require`s it into its own process.
+
+---
+
+## 5. Bootstrap contract — the implicit globals
+
+Procedural PHP with no DI container means the include chain establishes globals that every page and
+handler relies on. **Know these before adding a query.**
+
+### 5.1 Session / user context (`includes/load_user_session.php`)
+
+| Variable | Type | Notes |
+|---|---|---|
+| `$mysqli` | resource | The connection. From `config.php` |
+| `$session_user_id` | int | |
+| `$session_name` | string | **SQL-escaped** (`escapeSql`) — safe in queries, escape again for HTML |
+| `$session_email`, `$session_avatar`, `$session_token` | string | Raw |
+| `$session_user_type` | int | `1` agent, `2` client contact. Agent pages hard-reject anything else |
+| `$session_user_role` | int | `user_roles.role_id` |
+| `$session_user_role_display` | string | SQL-escaped role name |
+| `$session_is_admin` | bool | `role_is_admin = 1`. **The single canonical admin gate** |
+| `$session_ip`, `$session_user_agent` | string | SQL-escaped. `logAudit()` reads these |
+| `$user_config_records_per_page` | int | Drives paging in `filter_header.php` |
+| `$user_config_theme_dark` | int | |
+| `$client_access_array` / `$client_deny_array` | int[] | The user's per-client allow / deny lists |
+| `$client_access_string` / `$client_deny_string` | string | Comma-joined, for `IN (…)` fragments |
+| `$access_permission_query` | string | Ready-made ` AND clients.client_id IN (…) AND … NOT IN (…)` fragment. Empty for admins. **Append this to client-listing queries** |
+
+A session whose user is not an active, non-archived agent is destroyed and redirected to login.
+
+### 5.2 Company + settings (`load_company_settings.php`, `load_global_settings.php`)
+
+- `$session_company_name`, `$session_company_country`, `$session_company_locale`,
+  `$session_company_currency`, `$currency_format` (a `NumberFormatter`).
+- Every `settings.config_*` column becomes a `$config_*` global, cast at load: mail (SMTP/IMAP/OAuth),
+  numbering prefixes and next-numbers, ticket behaviour, invoice/quote/project settings, module
+  switches, login policy, theme, telemetry, white-label, `$config_enable_cron`.
+- Constants: `CURRENT_DATABASE_VERSION`, and from `includes/database_version.php`,
+  `LATEST_DATABASE_VERSION` (derived from the highest-numbered file in `admin/database_updates/`).
+- Select arrays: `$colors_array`, `$records_per_page_array`, `$asset_types_array`, plus the
+  localization arrays from `includes/settings_localization_array.php`.
+
+### 5.3 List page context (`includes/filter_header.php`)
+
+`$page`, `$record_from`, `$record_to` (paging), `$order` / `$disp` / `$order_icon` (sorting),
+`$sort` (already filtered to `[a-z_]`), `$q` and `$phone_query` (search, SQL-escaped),
+`$dtf` / `$dtt` (date range from `canned_date` presets or custom), `$archived` and `$archive_query`,
+`$url_query_strings_sort` (query string rebuilt without sort/order).
+
+### 5.4 Client-scoped page context (`agent/includes/inc_all_client.php`)
+
+`$client_id` (int), all `$client_*` / `$contact_*` / `$location_*` view fields (HTML-escaped),
+`$client_tags_display`, financial rollups (`$balance`, `$recurring_monthly`, `$credit_balance`),
+every `$num_*` sidebar count, and the expiry warning counts for domains, certificates and software.
+
+---
+
+## 6. Security model
+
+This section is non-negotiable. Nothing else in the codebase enforces it for you.
+
+### 6.1 SQL — every interpolated value is cast or escaped
+
+| Value kind | Treatment | Interpolation |
+|---|---|---|
+| Integers (ids, flags, counts) | `intval($_POST['ticket_id'])` | **Unquoted**: `WHERE ticket_id = $ticket_id` |
+| Strings | `escapeSql($_POST['subject'])` | **Quoted**: `SET ticket_subject = '$subject'` |
+| Floats | `floatval(...)` | Unquoted |
+| Values read back from the DB and reused in another query | `escapeSql($row['ticket_prefix'])` | Quoted |
+| Rich text / HTML bodies | `mysqli_real_escape_string($mysqli, $_POST['details'])` — `escapeSql()` would strip the tags | Quoted |
+
+`escapeSql()` normalizes encoding to UTF-8, then applies `strip_tags()`, `trim()` and
+`mysqli_real_escape_string()`. **Because it relies on SQL escaping, the value must sit inside quotes
+in the query.** An escaped string interpolated unquoted is still injectable.
+
+Dynamic identifiers (table/column names) are never user data. Where a helper must interpolate one —
+`getFieldById()` — it validates against `^[a-zA-Z0-9_]+$` and confirms the column exists first.
+
+**One un-neutralized variable is a SQL injection. This is the most common review rejection.**
+
+### 6.2 Fetch helpers return raw values — the call site escapes
+
+`getFieldById($table, $id, $field)` and `getTicketStatusName($status)` return exactly what is in the
+column:
+
+```php
+$client_name = escapeSql(getFieldById('clients', $client_id, 'client_name'));   // into a query
+$client_name = escapeHtml(getFieldById('clients', $client_id, 'client_name'));  // into a page
+$client_id   = intval(getFieldById('tickets', $ticket_id, 'ticket_client_id')); // an id
+```
+
+These helpers used to escape internally. It went badly: most call sites wrapped them anyway, so
+`O'Brien` became `O\'Brien` and the stray backslash reached export filenames, PDF headings, flash
+messages and, on one path, the database. **A value that is already safe cannot be made safer, only
+wrong.** Any new `getXById()`-style helper returns raw.
+
+### 6.3 CSRF — every state-changing action
+
+`validateCSRFToken()` is the **first** line of every action block. It takes no argument: it reads
+`csrf_token` from `$_POST`, then `$_GET`, so one call covers form posts and link-style actions.
+Failure returns a real **403** page and exits — deliberately not a redirect, because a 302 makes
+curl, browsers and scanners record a final 200 and report the request as accepted.
+
+Every form and action link must carry the token:
+
+```html
+<input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+```
+
+### 6.4 Permissions — RBAC
+
+`enforceUserPermission($module, $level)` where `$level` is `1` read, `2` write, `3` full/delete.
+Admins (`role_is_admin = 1`) short-circuit to level 3 via `lookupUserPermission()`.
+
+| Module | Covers |
+|---|---|
+| `module_client` | Clients, contacts, locations, vendors |
+| `module_support` | Tickets, assets, documentation, domains, certificates, software, networks |
+| `module_credential` | Credentials — usernames, passwords, TOTP secrets |
+| `module_sales` | Quotes, invoices, products |
+| `module_financial` | Payments, accounts, expenses, budgets |
+| `module_reporting` | All reports |
+
+Level convention: read pages `1`, create/edit `2`, destructive `3`. CSV/PDF exports are reads — gate
+with the bare one-argument form, e.g. `enforceUserPermission('module_sales')`.
+
+Built-in roles seeded at setup: **Accountant** (id 1), **Technician** (id 2), **Administrator**
+(id 3, `role_is_admin = 1`). Roles and their per-module levels are editable in `admin/roles.php`.
+
+Two portals are gated differently, which is why their handlers *look* like they are missing the call:
+**admin** inherits the gate from `admin/post.php`; the **client portal** uses
+`enforceContactCan($capability)`.
+
+### 6.5 Client scoping — enforced, not assumed
+
+`enforceClientAccess($client_id = null)` — call it **after** loading the record, with the record's
+client id. Semantics:
+
+1. Admin → allow.
+2. An explicit **deny** row → refuse, audit-log, flash, redirect. **Deny always wins.**
+3. User has **no allow rows at all** → unrestricted, allow.
+4. Otherwise → allow only if an allow row exists for that client.
+
+For records that may legitimately have no client (a ticket with `ticket_client_id = 0`), guard the
+call: `if ($client_id) { enforceClientAccess($client_id); }`. Some modals additionally build an
+`$access_permission_query_overide` fragment to include `0` in the allowed set — copy
+`agent/modals/ticket/ticket_edit.php` when you need that.
+
+For list queries, append the ready-made `$access_permission_query` fragment.
+
+### 6.6 Output escaping
+
+Everything rendered into HTML goes through `escapeHtml()` (`htmlspecialchars` with `ENT_QUOTES`,
+UTF-8). `escapeSql()` on the way in is **not** output escaping — data enters the database through the
+API, the email parser, and older versions.
+
+**Escape where the row is read, not where it is echoed:**
+
+```php
+$row        = mysqli_fetch_assoc($sql);
+$asset_id   = intval($row['asset_id']);        // ints get intval, not escapeHtml
+$asset_name = escapeHtml($row['asset_name']);
+$asset_uri  = escapeUrl($row['asset_uri']);    // URLs get escapeUrl (scheme allow-list)
+...
+<strong><?= $asset_name ?></strong>
+```
+
+Escaping at the echo double-escapes an already-safe value, and mixing the two styles is how fields
+get missed. A view variable that does not come from a row is escaped at assignment so the rule holds
+at the top of the file.
+
+**Exceptions:** rich-text (TinyMCE) fields have per-field handling — follow the existing pattern for
+that specific field. Untrusted HTML shown to guests is run through **HTMLPurifier**
+(`libs/htmlpurifier/`), as in `guest/guest_view_ticket.php`.
+
+`escapeUrl()` allows a fixed scheme list (http/https/ftp/sftp/ssh/rdp/vnc/smb/ldap/remote-support
+schemes and similar) and rewrites anything else to `unsupported://…`, which neutralizes
+`javascript:` and `data:` links.
+
+CSV exports additionally pass through `escapeCsvFormula()`, which prefixes `=`, `+`, `-`, `@`, tab
+and CR with a quote so spreadsheets treat the cell as text (CWE-1236). This is *not* CSV structural
+escaping — `fputcsv()` already handles that.
+
+### 6.7 No shell-outs, no `eval`
+
+The project has moved off `shell_exec`/`exec` in favour of native PHP — `dns_get_record()` instead of
+`dig`, RDAP instead of `whois`. **Do not add new shell execution or `eval`.** PRs introducing either
+are declined.
+
+A handful of legacy call sites survive, all wrapping `git` or `which` in the self-update and
+diagnostics paths: `admin/debug.php`, `admin/update.php`, `admin/post/update.php`,
+`admin/post/backup.php`, `cron/cron.php`, `functions/app.php`, `scripts/update_cli.php`,
+`setup/index.php`. **Treat them as debt, not precedent.**
+
+### 6.8 Filesystem guards
+
+| Path | Guard |
+|---|---|
+| `/.htaccess` | 401s `.git`, `.github`, `config.php` |
+| `uploads/.htaccess` | `Options -ExecCGI -Indexes`, `php_flag engine off`, `RemoveHandler`/`RemoveType` for php/phtml/phar/phps, and a `FilesMatch` deny for php/cgi/pl/sh |
+| `uploads/backups/.htaccess`, `uploads/tmp/.htaccess` | `Require all denied` on top of the above |
+| `scripts/.htaccess`, `cron/.htaccess` | Deny web access — these are CLI only |
+| `uploads/*/index.php` | Directory-listing stubs kept in git (see `.gitignore`) |
+
+Uploaded files are validated by `checkFileUpload($file, $allowed_extensions)`, which requires a
+well-formed single-file upload, `UPLOAD_ERR_OK`, `is_uploaded_file()`, a non-zero size ≤ 500 MB, and
+an allow-listed final extension. **It returns a random 32-character storage name plus the extension —
+the client's filename is never used on disk**, so path traversal and `evil.php.jpg` double extensions
+are structurally irrelevant.
+
+`backupAssertUploadsGuards()` unconditionally rewrites these `.htaccess` files after a restore,
+because an archive is allowed to contain its own.
+
+### 6.9 Authentication, sessions and encryption
+
+**Session cookies** (`includes/session_init.php`): `HttpOnly`, `SameSite=Lax`, `use_strict_mode = 1`
+(refuse a session id the server never issued), and `Secure` unless `$config_https_only` is explicitly
+falsy.
+
+**Login** (`login.php`) is unified for agents and client contacts on one email + password, and is a
+multi-step state machine:
+
+1. **Credentials** → `password_verify()`.
+2. **Role choice** → only when one email maps to both an agent and a contact account.
+3. **MFA** → TOTP (`libs/totp/`), with a remember-me bypass when a valid token cookie is present.
+
+Hardening in that file, all of which you must preserve if you touch it:
+
+- Per-IP failure counting serialized with a MySQL advisory lock for the whole request, because the
+  count and the failure write straddle `password_verify()` — without the lock a parallel burst all
+  reads the same sub-threshold count. Lock timeout **fails open** rather than locking anyone out.
+- A separate per-account limit on second-factor attempts with its own lock, because an IP limit does
+  not constrain a burst spread across hosts.
+- No log row and no notification email while locked out — both are attacker-controlled per-request
+  writes.
+- `session_regenerate_id()` on successful authentication (CWE-384).
+- `last_visited` redirect targets are accepted only when they start with `/agent` or `/admin`.
+- Optional `config_login_key_required` / `config_login_key_secret` gate on the agent flow.
+- Optional Microsoft Entra SSO (`$config_azure_client_id` / `_secret`, `client/login_microsoft.php`,
+  `admin/identity_providers.php`).
+
+**Credential encryption** (`functions/security.php`) is a three-layer key hierarchy. Learn it before
+touching anything credential-related:
+
+```
+site master key            random, generated at first install
+  └── per-user ciphertext  users.user_specific_encryption_ciphertext
+                           = salt(16) . iv(16) . AES-128-CBC(master, PBKDF2-SHA256(password, salt, 100000, 16))
+      └── session key      at login the master key is re-encrypted under a random 16-byte key:
+                           ciphertext + iv live in $_SESSION,
+                           the KEY is handed to the browser as the user_encryption_session_key cookie
+          └── credential   credentials.* = iv(16) . AES-128-CBC(value, master key)
+```
+
+Consequences that matter:
+
+- The server never stores the master key in a form it can decrypt alone — decryption requires the
+  user's cookie. A database dump alone does not yield credentials.
+- `encryptCredentialEntry()` **returns `false` if the session did not open**, so a credential is never
+  written under an empty key. Check the return value.
+- Creating a user, or changing a password, requires an *existing* session with a live key —
+  `encryptUserSpecificKey()` reads the current session to obtain the master key.
+- Cleartext credential fields are capped at `CREDENTIAL_ENTRY_MAX_LENGTH` (350) because ciphertext
+  expands ~1.37× into `varchar(500)`. Validate with `checkCredentialLengths()` on every path that can
+  write a credential — form maxlength is client-side only; CSV import, the API and hand-rolled POSTs
+  reach the INSERT unimpeded, and MySQL *rejects* rather than truncates.
+- API credential access uses `apiEncryptCredentialEntry()` / `apiDecryptCredentialEntry()` with the
+  key's own decrypt hash and a password supplied **in the request body**, never the query string.
+
+**Shared items** (`shared_items`, `functions/security.php::claimSharedItemView()`): a share is
+claimed with a single conditional `UPDATE` that increments the view count only while the share is
+active, unexpired and under its view limit. `affected_rows === 1` is the only success. **Call it
+before disclosing anything** — that atomicity is what stops concurrent requests all passing.
+
+### 6.10 API authorization in detail
+
+Every API key is owned by a user (`api_keys.api_key_user_id`); keys with no user are rejected
+outright. `enforce_api_rbac.php` then:
+
+1. Loads the linked user and refuses if they are not an active, non-archived agent.
+2. Rebuilds `$client_access_array` / `$client_deny_array` from `user_client_permissions`.
+3. Derives the resource and operation from **`SCRIPT_NAME`** (the file actually executed, so URL
+   rewrites cannot spoof it), maps resource → module via the `$resource_module` table, and maps
+   operation → level (`read.php` 1, `create.php`/`update.php` 2, `delete.php` 3).
+4. **Fails closed:** a resource not present in `$resource_module` is denied. *Adding a new API
+   resource means adding its module mapping — that deliberate step is what brings it under RBAC.*
+5. For writes, validates the caller-supplied `client_id` with `apiUserCanAccessClient()`. Reads
+   ignore it and are scoped with `apiClientScopeSql($column)`, appended after a `WHERE 1=1` anchor.
+
+Keys expire (`api_key_expire`); failed authentications are written to `logs` with the endpoint path.
+
+### 6.11 Reporting vulnerabilities
+
+Privately, per `SECURITY.md`. **Never in a public issue.**
+
+---
+
+## 7. Subsystems
+
+### 7.1 Mail
+
+Nothing sends mail inline. Code calls `addToMailQueue($data)` (`functions/app.php`), which inserts
+into `email_queue`; `cron/mail_queue.php` delivers via PHPMailer.
+
+`$data` is an array of messages, each with `from`, `from_name`, `recipient`, `recipient_name`,
+`subject`, `body`, optionally `cal_str` (an iCalendar string built by `functions/calendar.php`),
+`queued_at`, and `attachments`.
+
+**Attachments travel as a manifest of app-root-relative paths, not contents**, so the queue table
+stays small; `cron/mail_queue.php` re-checks each path is inside `uploads/` before attaching.
+`MAX_EMAIL_ATTACHMENT_BYTES` (10 MB, `functions.php`) caps what will be attached to one message —
+uploads are allowed up to 500 MB, which no mail server will accept, so anything larger stays on the
+ticket for the recipient to download. Use `filterEmailableAttachments()`.
+
+SMTP and IMAP settings, including OAuth2 (Microsoft) with a stored refresh token, live in
+`settings.config_smtp_*` / `config_imap_*` / `config_mail_oauth_*`.
+
+Inbound: `cron/ticket_email_parser.php` reads the support mailbox and turns mail into tickets and
+replies, honouring `config_ticket_email_parse` and `config_ticket_email_parse_unknown_senders`.
+
+### 7.2 Cron
+
+**Registry:** `includes/cron_jobs.php` — `cronJobRegistry()` is the only thing that decides *which*
+scripts may run. The `cron_jobs` table holds *when and whether*. A row naming a script that is not in
+the registry is ignored, so nothing reaching the database can point the dispatcher at an arbitrary
+file. **Keep it that way.**
+
+| Job | Script | Default schedule | Flags |
+|---|---|---|---|
+| `mail_queue` | `mail_queue.php` | Every minute | |
+| `ticket_email_parser` | `ticket_email_parser.php` | Every minute | |
+| `ticket_sla` | `ticket_sla.php` | Every minute | |
+| `nightly_tasks` | `nightly_tasks.php` | Daily 03:00 | `interval_safe => false` |
+| `certificate_refresher` | `certificate_refresher.php` | Daily 03:30 | |
+| `domain_refresher` | `domain_refresher.php` | Daily 04:00 | One domain per run |
+| `backup` | `backup.php` | Daily 02:00 | `enabled => 0`, `interval_safe => false` |
+
+Schedules in the registry are **defaults** — they seed the row the first time the dispatcher meets a
+job; from then on the row (edited in Maintenance > Cron) is what runs.
+
+**Four rules for job code, because jobs share one PHP process:**
+
+1. **Never `exit()` or `die()`.** That ends the whole cycle and every job after it. Use
+   `cronJobStop($message, $exit_code)`, which exits when the script was run directly and unwinds back
+   to the dispatcher when it wasn't.
+2. **Never declare a function or class another job might declare.** Two jobs declaring the same
+   helper is a fatal `Cannot redeclare`. Shared helpers belong in `functions/`.
+3. **Be safe to run twice in one day.** The lock stops overlap, not repetition — an admin can press
+   Run Now after the scheduled pass. Work selected by `= CURDATE()` fires again unless something
+   records that it happened (nightly's late fees and reminders guard on the history rows they write).
+   Work that cannot be made repeat-safe declares `'interval_safe' => false`.
+4. **Set what you read.** One global scope, one set of `require_once`s. A job's own
+   `require_once "../config.php"` is a no-op if an earlier job loaded it, and variables an earlier job
+   left behind are still there.
+
+**The master switch.** `config_enable_cron` is *not* enforced by the dispatcher — **every job checks
+it in its own header and stops itself with `cronJobStop()`. A new job must make that check too.** It
+defaults to `0`. It is not a guard on restored data (a backup dumps `settings`, so a restore comes
+back with cron enabled exactly as production had it); what it gives you is one reversible bit — the
+fastest way to stop an install acting on live data, and the only way to stop everything without
+editing seven rows and accidentally enabling `backup`, which ships off.
+
+**Run Now** does not execute anything in the web request. These scripts are CLI-only and some take
+minutes, so the button sets `cron_job_run_now` and the next dispatch consumes it through the same
+lock and claim as a scheduled run.
+
+Due-ness is recorded in the table rather than matched against the clock, so a missed minute runs at
+the next opportunity rather than being skipped for the day. Jobs are claimed **before** they run, so
+a run that dies half way through is not repeated — which matters because `nightly_tasks.php`
+generates invoices and charges cards. Each job takes its own lock (`cron/includes/cron_lock.php`), so
+a hung job holds up only itself. Every script still runs standalone (`php cron/mail_queue.php`) and
+still locks when it does.
+
+### 7.3 Backups
+
+`functions/backup.php` is the whole engine. All three entry points go through it: Maintenance >
+Backup, `cron/backup.php`, `scripts/restore_cli.php`. **Nothing else may dump, zip, or import a
+database.**
+
+- Archives are **AES-256 encrypted zips**. The key is one value per install, generated on first use
+  and appended to `config.php` — never the database, never the filename. A leaked backup cannot be
+  opened with anything the backup itself contains, and a URL or access log never carries the key. The
+  32 random characters in the filename are an unguessable path component, nothing more.
+- `unzip`, Windows Explorer and macOS Archive Utility **cannot** read AES zips. 7-Zip, WinZip, PeaZip
+  and Keka can.
+- The web tier never builds an archive in the request — it writes a `Pending` row and
+  `cron/backup.php` does the work, because a real dump outlives `request_terminate_timeout` and
+  `set_time_limit()` does not help.
+
+**Two rules for anything touching restore:**
+
+1. **Validate before you destroy.** The key is checked and the archive unpacked before a single table
+   is dropped, and the live database is dumped to a rollback file first; a failed import puts the
+   rollback back. `mysqli` **throws** rather than returning false under PHP 8.1+ default report mode,
+   so every statement in the import path is wrapped — an uncaught throw there leaves an install with
+   no database at all.
+2. **The archive does not get to decide what our guards say.** A restore wipes `uploads/`, and an
+   archive may contain a `.htaccess`. `backupAssertUploadsGuards()` rewrites ours unconditionally
+   afterwards, and the backup storage directory is preserved through the wipe so a restore cannot
+   destroy every other archive on the box.
+
+Retention lives in `nightly_tasks.php`, never in the backup job, so a failed backup cannot delete the
+archive it was meant to replace. It never removes the newest complete backup, and an archive on disk
+with no row is **adopted** rather than deleted (after a restore the `backups` table is the old one,
+so everything made since looks unknown).
+
+Setup's restore step closes itself once the `users` table has rows, whatever `config.php` says.
+
+### 7.4 SLA (`functions/sla.php`)
+
+Business hours are configuration: `config_business_days`, `config_business_hours_start`,
+`config_business_hours_end`, `config_sla_warning_percent`, `config_sla_notification_email` — read
+through `getSlaSettings()`.
+
+All SLA arithmetic is **business-minute** arithmetic, not wall clock: `addBusinessMinutes()`,
+`businessMinutesBetween()`. Key entry points: `applyTicketSla($ticket_id, $forced_sla_id = null)`
+(assign on create), `getTicketSlaId($client_id, $priority)` (resolve which SLA applies),
+`syncTicketSlaClock()`, `setTicketFirstResponse()`, `setTicketResolutionSlaMet()`,
+`resetTicketResolutionSla()`. Pausing is tracked, and `getTicketSlaConsumedMinutes()` accounts for it.
+
+`cron/ticket_sla.php` moves tickets through warning and breach stages and sends the alerts. Without
+the dispatcher scheduled, targets are still calculated and displayed but **nothing ever fires**.
+
+Tables: `slas`, `sla_assignments`, `sla_history`.
+
+### 7.5 Exports (`functions/export.php`)
+
+A shared, column-pickable export framework used across list pages. Flow:
+
+```php
+$columns  = resolveExportColumns($export_type);            // from getExportColumns() + user picks
+$format   = resolveExportFormat($_GET['format']);          // csv | pdf
+guardExportPdfRowCount($format, mysqli_num_rows($sql));    // PDFs have a row ceiling
+$export = beginExport($export_type, $format, $filename_base, $title, $subtitle);
+while ($row = mysqli_fetch_assoc($sql)) { addExportRow($export, $row); }
+reportMissingExportFields($export);
+finishExport($export);
+```
+
+UI helpers render the modal's tabs and column picker: `renderExportColumnPicker()`,
+`exportTabsNav()`, `exportTabsColumns()`, `renderExportButtons()`, `buildExportModalUrl()`,
+`summarizeExportFilters()`, `formatExportDateRange()`.
+
+**Exports are reads** — gate them with the bare `enforceUserPermission('module_x')`.
+
+### 7.6 Files and uploads (`functions/files.php`)
+
+`saveTicketAttachments($ticket_id, $reply_id, $field_name)`, `filterEmailableAttachments()`,
+`saveBase64Images()` / `cleanupUnusedImages()` (TinyMCE pastes data-URI images; these extract them to
+disk and garbage-collect orphans), plus `mkdirMissing()`, `copyDirectory()`, `removeDirectory()`.
+
+Storage layout under `uploads/`: `clients/`, `documents/`, `document_templates/`, `expenses/`,
+`recurring_tickets/`, `settings/`, `tickets/`, `ticket_templates/`, `users/`, `tmp/`, `backups/`,
+`custom/`. All gitignored except the `index.php` stubs and the `.htaccess` guards.
+
+### 7.7 Logging, audit and notifications (`functions/logging.php`)
+
+| Function | Table | Use |
+|---|---|---|
+| `logAudit($type, $action, $description, $client_id, $entity_id)` | `logs` | The user-facing audit trail. **Every state change.** Reads `$session_ip`, `$session_user_agent`, `$session_user_id` from globals |
+| `logTicketHistory($ticket_id, $description)` | `ticket_history` | Per-ticket change trail. Call **after** the change — it stamps the ticket's current status |
+| `logApp($category, $type, $details)` | `app_logs` | Internal/system events (cron, mail, updates) |
+| `appNotify($type, $details, $action, $client_id, $entity_id)` | `notifications` | Fans out an in-app notification to **every active agent** |
+| `triggerCustomAction($trigger, $entity)` | — | Fires the site's custom hook, if present |
+
+Descriptions are interpolated as-is, so **callers pass SQL-safe values**. `logTicketHistory()` also
+trims to 255 chars and strips a dangling backslash the cut may have orphaned.
+
+Auth events land in `auth_logs`; retention is governed by `config_log_retention` and swept by
+`nightly_tasks.php`.
+
+### 7.8 Domains, DNS and certificates (`functions/domain.php`)
+
+Native PHP only — no `dig`, no `whois` binary. RDAP first (`getDomainRdap()`, `getRdapBaseUrl()`,
+`getRdapSummary()`), a raw socket WHOIS fallback (`whoisSocketQuery()`, `getDomainWhois()`),
+`getDnsRecords()` via `dns_get_record()`, and `getSslCertificate($full_name)` via a TLS stream
+context. Refreshed by `cron/domain_refresher.php` (one domain per run, oldest first) and
+`cron/certificate_refresher.php`. History in `domain_history`, `certificate_history`.
+
+### 7.9 Payments (`functions/payments.php`, `includes/stripe_init.php`)
+
+`updateInvoiceStatusFromPayments($invoice_id)` is the single place invoice status is derived from
+payment rows — call it after any payment change rather than setting the status by hand.
+
+Stripe is vendored at `libs/stripe-php/`. **Always require `includes/stripe_init.php`, never the
+library's own `init.php`**: stripe-php ≥ 21 writes a telemetry UUID under `$HOME/.config/stripe/`,
+which on `open_basedir` hosts (Hestia, cPanel, Plesk) emits un-suppressed warnings that corrupt JSON
+responses and break `header()` redirects. The shim redirects it to a writable temp dir.
+
+Related: `payment_providers`, `payment_methods`, `client_payment_provider`,
+`client_saved_payment_methods`, `recurring_payments`, `credits`, `discount_codes`. Guest payment
+flows live in `guest/guest_pay_invoice_stripe.php`; autopay setup in `agent/client_autopay.php`.
+
+### 7.10 AI providers
+
+`ai_providers` (name, API URL, API key) and `ai_models` (model name, prompt, use case, FK to
+provider), administered in `admin/ai_providers.php` / `admin/ai_models.php`. Provider-agnostic:
+ITFlow stores an endpoint URL, a key and a prompt per use case. Current consumer: ticket summarization
+(`agent/modals/ticket/ticket_summary.php`, `agent/js/ai_ticket_summary.js`).
+
+### 7.11 Updates and telemetry
+
+`checkForUpdates()` and `getRepoBranch()` (`functions/app.php`) compare against the tracked branch
+(`$repo_branch`); the web updater is `admin/update.php` + `admin/post/update.php`, the CLI equivalent
+is `scripts/update_cli.php`. `config_telemetry` governs anonymous reporting keyed by
+`$installation_id`. White-labelling is gated by `validateWhitelabelKey()`, an RSA-signed key checked
+against a bundled public key.
+
+### 7.12 Custom fields and links
+
+`custom_fields` (`custom_field_table`, `custom_field_label`, `custom_field_type`,
+`custom_field_location`, `custom_field_order`) with values in `custom_values`; administered in
+`admin/settings_custom_fields.php`. `custom_links` add site-defined navigation entries.
+
+---
+
+## 8. Data model
+
+### 8.1 Naming conventions
+
+**Every column is prefixed with the singular name of the entity it belongs to**: `tickets.ticket_id`,
+`tickets.ticket_subject`, `clients.client_name`. This makes JOIN results unambiguous and is precisely
+why `SELECT *` across joins is safe here. New tables must follow it.
+
+The prefix is the **entity** name, usually but not always the singular of the table name. Where a
+table is named for its container rather than its row, the prefix follows the row:
+
+| Table | Column prefix |
+|---|---|
+| `calendar_events` | `event_*` |
+| `asset_interfaces` | `interface_*` |
+| `invoice_items`, `quote_items` | `item_*` |
+| `rack_units` | `unit_*` |
+| `user_roles` | `role_*` |
+| `product_stock` | `stock_*` |
+
+**Two standing exceptions:** junction tables (`client_tags`, `service_assets`, `software_assets`, …)
+carry the two parent FK names unprefixed; `settings` / `user_settings` use `config_*` /
+`user_config_*`.
+
+Other conventions: soft deletion is `*_archived_at datetime NULL` (never a boolean); timestamps are
+`*_created_at` / `*_updated_at` with `DEFAULT current_timestamp()` / `ON UPDATE current_timestamp()`;
+guest-accessible records carry a `*_url_key` of 32 random characters.
+
+### 8.2 Entity map
+
+**Clients & CRM** — `clients`, `contacts`, `locations`, `vendors`, `client_notes`, `contact_notes`,
+`tags` + `client_tags`/`contact_tags`/`credential_tags`/`location_tags`, `categories`.
+
+**Documentation** — `assets` (+ `asset_interfaces`, `asset_interface_links`, `asset_notes`,
+`asset_history`, `asset_custom`, and `asset_credentials`/`asset_documents`/`asset_files` links),
+`credentials`, `documents` (+ `document_versions`, `document_templates`, `document_files`),
+`files` + `folders`, `networks`, `racks` + `rack_units`, `certificates`, `domains`, `software`
+(+ `software_keys` and their asset/contact assignments), `services` and its link tables,
+`contracts` + `contract_templates`.
+
+**Support** — `tickets`, `ticket_replies`, `ticket_statuses`, `ticket_history`, `ticket_attachments`,
+`ticket_watchers`, `ticket_assets`, `ticket_views`, `ticket_templates`, `tasks` + `task_templates` +
+`task_approvals`, `recurring_tickets` (+ `recurring_ticket_tasks`, `recurring_ticket_assets`),
+`projects` + `project_templates` + `project_template_ticket_templates`, `slas` + `sla_assignments` +
+`sla_history`.
+
+**Sales & finance** — `quotes` + `quote_items` + `quote_files`, `invoices` + `invoice_items`,
+`recurring_invoices` + `recurring_invoice_items`, `payments`, `recurring_payments`, `credits`,
+`expenses`, `recurring_expenses`, `revenues`, `transfers`, `accounts`, `taxes`, `products`,
+`product_stock`, `budget`, `trips`, `discount_codes`, `payment_methods`, `payment_providers`.
+
+**Platform** — `users`, `user_settings`, `user_roles`, `user_role_permissions`,
+`user_client_permissions`, `modules`, `api_keys`, `settings`, `companies`, `cron_jobs`, `backups`,
+`email_queue`, `notifications`, `logs`, `app_logs`, `auth_logs`, `history`, `records`,
+`remember_tokens`, `shared_items`, `custom_fields` + `custom_values`, `custom_links`,
+`calendars` + `calendar_events` + `calendar_event_attendees`, `ai_providers` + `ai_models`.
+
+### 8.3 Enumerations
+
+| Concept | Values |
+|---|---|
+| Ticket status (seeded ids) | `1` New · `2` Open · `3` On Hold · `4` Resolved · `5` Closed. **User-extensible** via `ticket_statuses` — resolve names with `getTicketStatusName()`, don't hardcode |
+| Ticket priority | `Low`, `Medium`, `High`, `Urgent` (client portal validates against this list; agent side is settings-driven) |
+| Invoice status | `Draft`, `Sent`, `Viewed`, `Partial`, `Paid`, `Cancelled`, `Non-Billable` |
+| Quote status | `Draft`, `Sent`, `Viewed`, `Accepted`, `Declined`, `Invoiced` |
+| `user_type` | `1` agent · `2` client contact |
+| `user_status` | `1` active |
+| Permission level | `1` read · `2` write · `3` full/delete |
+| `user_client_permissions.permission_type` | `allow` · `deny` (deny wins) |
+| Cron schedule | `Interval` (`cron_job_interval_minutes`) · `Daily` (`cron_job_daily_at`) |
+
+### 8.4 Document numbering
+
+Prefix + next-number pairs live in `settings` (`config_ticket_prefix`/`config_ticket_next_number`,
+and the same for invoice, recurring invoice, quote, project). **Allocate a number atomically** — the
+established idiom:
+
+```php
+mysqli_query($mysqli, "
+    UPDATE settings
+    SET config_ticket_next_number = LAST_INSERT_ID(config_ticket_next_number),
+        config_ticket_next_number = config_ticket_next_number + 1
+    WHERE company_id = 1
+");
+$ticket_number = mysqli_insert_id($mysqli);
+```
+
+Never `SELECT` then `UPDATE` — that races.
+
+---
+
+## 9. Recipes
+
+Each recipe is a complete checklist. Follow it in order.
+
+### 9.1 Add a field to an existing module
+
+1. **`db.sql`** — add the column to the `CREATE TABLE`, following the prefix convention.
+2. **`admin/database_updates/<next x.y.z>.php`** — new file, named for the version it upgrades *to*,
+   containing only the `ALTER TABLE`. Copy an existing file's header, including
+   `defined('FROM_DB_UPDATER') || die(...)`. **Never edit a historical migration.**
+3. **Modal(s)** — add the input to `<portal>/modals/<module>/<module>_add.php` and `_edit.php`. In
+   the edit modal, assign the value through `escapeHtml()` / `intval()` where the row is read.
+4. **Handler** — collect and sanitize in `<portal>/post/<module>.php` (or `<module>_model.php` if
+   create and edit share it), and add it to both the INSERT and the UPDATE.
+5. **Views** — display it wherever the module is shown.
+6. **Exports** — if the module has an export, add the column to `getExportColumns()`.
+7. **API** — if the module has endpoints, add it to the relevant `read`/`create`/`update`.
+8. **Bulk actions** — check for a `bulk_*` counterpart and update it too (§11).
+
+There is no version constant to bump: `LATEST_DATABASE_VERSION` derives from the migration
+directory, and `admin/database_updates.php` steps `config_current_database_version` after each file
+succeeds.
+
+### 9.2 Add a new action to an existing module
+
+Open `<portal>/post/<module>.php` and add a block following §4.2 exactly. Then add the trigger —
+a form in a modal or an action link — carrying `csrf_token`.
+
+### 9.3 Add a new list page
+
+```php
+<?php
+require_once "includes/inc_all.php";        // sets up $order, $sort, $q, $record_from, paging, …
+
+enforceUserPermission('module_support');
+
+$sql = mysqli_query($mysqli, "SELECT SQL_CALC_FOUND_ROWS * FROM widgets
+    LEFT JOIN clients ON widget_client_id = client_id
+    WHERE widget_name LIKE '%$q%'
+    AND widget_archived_at IS NULL
+    $access_permission_query
+    ORDER BY $sort $order LIMIT $record_from, $record_to");
+```
+
+Render with the existing card/table markup from a neighbouring page (DataTables for client-side
+lists, `includes/filter_footer.php` for server-side paging), and add the entry to
+`agent/includes/side_nav.php` with any count in `get_side_nav_counts.php`.
+
+### 9.4 Add a migration
+
+One file: `admin/database_updates/<x.y.z>.php`, where `<x.y.z>` is the version it upgrades **to**.
+
+```php
+<?php
+
+/*
+ * ITFlow - Database update to version 2.6.7 (from 2.6.6)
+ * Included by admin/database_updates.php - do not access directly
+ */
+
+defined('FROM_DB_UPDATER') || die("Direct file access is not allowed");
+
+    mysqli_query($mysqli, "ALTER TABLE `widgets` ADD COLUMN `widget_colour` varchar(200) DEFAULT NULL");
+```
+
+Use `IF EXISTS` / `IF NOT EXISTS` where the operation may already have been applied. A run applies
+every pending file in order and stops at the first failure with the version left at the last file
+that completed, so a re-run resumes at the broken one. **Always ship the matching `db.sql` edit in
+the same PR** — that is what fresh installs get.
+
+### 9.5 Add an API endpoint
+
+1. Create `api/v1/<resource>/<operation>.php` following a neighbouring endpoint.
+2. **Add `<resource>` to `$resource_module` in `api/v1/enforce_api_rbac.php`.** Without this the
+   endpoint is denied — the enforcer fails closed by design.
+3. Require `validate_api_key.php`, then `require_get_method.php` or `require_post_method.php`.
+4. Scope reads with `apiClientScopeSql('<table>.<client_id_column>')` after a `WHERE 1=1` anchor.
+   Writes act on the validated `$client_id`.
+5. Sanitize every input exactly as a POST handler would, and respect `$limit` / `$offset`.
+6. Emit via the shared `read_output.php` / `create_output.php` / `update_output.php` /
+   `delete_output.php`.
+7. `logAudit()` the write.
+
+### 9.6 Add a cron job
+
+1. Write `cron/<job>.php`. Its header **must** check `config_enable_cron` and call `cronJobStop()`
+   when it is off.
+2. Register it in `includes/cron_jobs.php` with `name`, `label`, `script`, `description`, `schedule`
+   (`Interval` + `interval_minutes`, or `Daily` + `daily_at`), and optionally `enabled => 0` /
+   `interval_safe => false`.
+3. Obey the four rules in §7.2: no `exit()`/`die()`, no function or class declarations that could
+   collide, safe to run twice a day, set what you read.
+4. The crontab does **not** change.
+
+### 9.7 Add a modal
+
+Create `<portal>/modals/<module>/<name>.php` per §4.4, and trigger it with an `.ajax-modal` element
+carrying `data-modal-url` and `data-modal-size`. Remember §4.4's warning about which `post.php` the
+form actually submits to.
+
+### 9.8 Add a permission-gated admin setting
+
+1. Column on `settings` (`config_*`) → `db.sql` + a migration.
+2. Read it into a global in `includes/load_global_settings.php` with the right cast.
+3. Form field in the relevant `admin/settings_*.php`.
+4. Handler block in the matching `admin/post/settings_*.php` (CSRF + sanitize + UPDATE + `logAudit` +
+   `flashAlert` + `redirect`). No `enforceUserPermission()` — the admin dispatcher already gated it.
+
+---
+
+## 10. Definition of done
+
+Before you open a PR:
+
+- [ ] Every SQL-interpolated value is `intval()`/`floatval()`'d or `escapeSql()`'d **and quoted**.
+- [ ] Every rendered value is `escapeHtml()`'d (or `escapeUrl()` for links) **at assignment**.
+- [ ] Every state-changing block starts with `validateCSRFToken()`.
+- [ ] Every block enforces the right module permission at the right level (except admin handlers).
+- [ ] Every record load is followed by `enforceClientAccess()` where a client is involved.
+- [ ] State changes call `logAudit()`, and `flashAlert()` + `redirect()` rather than manual
+      `header()`/session keys.
+- [ ] Schema changes touch **both** `db.sql` and a **new** `admin/database_updates/<x.y.z>.php`.
+- [ ] A `bulk_*` counterpart, if one exists, got the same change.
+- [ ] No new Composer/npm dependency, no new `shell_exec`/`exec`/`eval`, no edits inside `libs/`.
+- [ ] 4-space indent, LF, UTF-8, English, matching the surrounding code. No drive-by reformatting.
+- [ ] Tested against a real install: **fresh setup from `db.sql`** *and*, if you touched schema, an
+      **upgrade through `database_updates.php`**.
+- [ ] `php -l` clean on every changed file (CI runs PHPLint; `db.sql` changes get an import lint).
+- [ ] Diff is small and single-purpose; relocation/reformatting is a separate commit or PR.
+
+PR description: **what** and **why**, with schema changes called out prominently. For anything larger
+than a bug fix, open an issue and agree the approach first.
+
+---
+
+## 11. Never do this
+
+| Anti-pattern | Why |
+|---|---|
+| Interpolating an unescaped value into SQL | SQL injection. The most common rejection |
+| `escapeSql()`'d string interpolated **without** quotes | Still injectable — the escaping assumes quotes |
+| Wrapping `getFieldById()` in `escapeSql()` *and* relying on it escaping internally | It returns raw by design; double-escaping corrupts names like `O'Brien` |
+| `escapeHtml()` at the echo instead of at assignment | Double-escapes already-safe values and hides missed fields |
+| Adding a Composer or npm runtime dependency | Breaks "unzip and go". Vendor into `libs/` after discussion |
+| Editing anything under `libs/` | The next wholesale update becomes an unreviewable diff |
+| Normalizing line endings in `libs/` | `.gitattributes` marks it `-text` deliberately |
+| New `shell_exec`, `exec`, `system`, `eval` | Declined on sight — use native PHP |
+| `exit()` or `die()` in a cron job | Kills the whole dispatch cycle and every job after it |
+| Declaring a function in a cron job | Fatal `Cannot redeclare` when jobs share a process |
+| A new cron job that skips the `config_enable_cron` check | Keeps running on an install that believes cron is off |
+| A new API resource without a `$resource_module` entry | Denied by design — but the fix is the mapping, not weakening the enforcer |
+| Editing a historical migration | Migrations are sequential and already applied in the field |
+| Bumping a "latest database version" constant | There isn't one — it derives from the directory |
+| `SELECT` then `UPDATE` to allocate a document number | Races. Use the `LAST_INSERT_ID()` idiom (§8.4) |
+| Sending mail inline | Queue it — `addToMailQueue()` |
+| Dumping/zipping/importing the database outside `functions/backup.php` | Bypasses validation, rollback and the uploads guards |
+| Changing a single action without checking its `bulk_*` twin | They are parallel implementations; drift is a known bug source |
+| Using an old helper name (`sanitizeInput`, `nullable_htmlentities`, `logAction`, …) | They no longer exist — calls fatal. See §12 |
+| Reformatting code you aren't changing | Buries the real diff |
+
+---
+
+## 12. Renamed helpers (2026)
+
+The old names **do not exist**; code calling them fatals. If you are rebasing an old branch or
+following an old tutorial, translate:
+
+| Old | New |
+|---|---|
+| `sanitizeInput` | `escapeSql` |
+| `nullable_htmlentities` | `escapeHtml` |
+| `logAction` | `logAudit` |
+| `flash_alert` | `flashAlert` |
+| `customAction` | `triggerCustomAction` |
+| `encryptLoginEntry` / `decryptLoginEntry` | `encryptCredentialEntry` / `decryptCredentialEntry` |
+| `strtoAZaz09` | `toAlphanumeric` |
+| `fetchUpdates` | `checkForUpdates` |
+| `sanitize_url` | `escapeUrl` |
+
+Also renamed: the `plugins/` directory is now **`libs/`**.
+
+---
+
+## 13. Helper function index
+
+Loaded by `functions.php` in this order. When adding a helper, put it in the topical file that
+matches its concern — never back into `functions.php`, which is a loader.
+
+| File | Concern | Notable functions |
+|---|---|---|
+| `functions/security.php` | Crypto, keys, CSRF, shares | `randomString`, `generateTotpSecret`, `setupFirstUserSpecificKey`, `encryptUserSpecificKey`, `decryptUserSpecificKey`, `generateUserSessionKey`, `encryptCredentialEntry`, `decryptCredentialEntry`, `apiEncryptCredentialEntry`, `apiDecryptCredentialEntry`, `checkCredentialLengths`, `validateCSRFToken`, `validateWhitelabelKey`, `claimSharedItemView` |
+| `functions/sanitize.php` | Input sanitization, uploads | `escapeHtml`, `escapeSql`, `escapeUrl`, `toAlphanumeric`, `sanitizeFilename`, `checkFileUpload`, `escapeCsvFormula` |
+| `functions/format.php` | Display formatting | `initials`, `truncate`, `formatPhoneNumber`, `formatAddress`, `timeAgo`, `shortenClientName`, `roundToNearest15Min`, `formatDuration`, `validateDate`, `validateRecurringFrequency`, `formatBytes`, `secondsToTime` |
+| `functions/request.php` | Request/response, outbound HTTP | `httpFormPost`, `getIP`, `getUserAgent`, `getWebBrowser`, `getOS`, `isMobile`, `redirect`, `flashAlert` |
+| `functions/files.php` | Filesystem, attachments | `removeDirectory`, `copyDirectory`, `mkdirMissing`, `saveBase64Images`, `cleanupUnusedImages`, `saveTicketAttachments`, `filterEmailableAttachments` |
+| `functions/domain.php` | DNS, WHOIS/RDAP, SSL | `getSslCertificate`, `getDomainRdap`, `getRdapSummary`, `getDomainWhois`, `getDnsRecords`, `getDomainExpirationDate` |
+| `functions/auth.php` | RBAC | `lookupUserPermission`, `enforceAdminPermission`, `enforceUserPermission`, `enforceClientAccess` |
+| `functions/logging.php` | Audit, notify, hooks | `triggerCustomAction`, `appNotify`, `logAudit`, `logTicketHistory`, `logApp` |
+| `functions/app.php` | App-wide odds and ends | `getAssetIcon`, `getInvoiceBadgeColor`, `getTicketStatusName`, `addTasksFromTicketTemplate`, `addTasksFromRecurringTicket`, `parseSubmittedTasks`, `getFieldById`, `displayFolderOptions`, `getRepoBranch`, `checkForUpdates`, `getMonthlyTax`, `getQuarterlyTax`, `addToMailQueue`, `createiCalStr`, `createiCalStrCancel` |
+| `functions/payments.php` | Payment side effects | `updateInvoiceStatusFromPayments` |
+| `functions/sla.php` | Business hours & SLA | `getSlaSettings`, `addBusinessMinutes`, `businessMinutesBetween`, `getTicketSlaConsumedMinutes`, `syncTicketSlaClock`, `getTicketSlaId`, `applyTicketSla`, `setTicketFirstResponse`, `setTicketResolutionSlaMet`, `resetTicketResolutionSla` |
+| `functions/export.php` | CSV/PDF export framework | `getExportColumns`, `resolveExportColumns`, `resolveExportFormat`, `guardExportPdfRowCount`, `renderExportColumnPicker`, `beginExport`, `addExportRow`, `finishExport` |
+| `functions/calendar.php` | iCalendar | `buildCalendarFeedIcs`, `expandRecurringEvent`, `icsFormatUtc`, `icsRepeatToRrule` |
+| `functions/backup.php` | Backup/restore engine | `backupQueue`, `backupCreate`, `backupRunQueued`, `backupEncryptionKey`, `backupStorageDir`, `backupInspectArchive`, `backupRestoreArchive`, `backupRunRetention`, `backupAssertUploadsGuards` |
+
+Client-portal-only helpers live in `client/functions.php` (`contactCan`, `enforceContactCan`).
+
+---
+
+## 14. Front-end specification
+
+- **Framework:** Bootstrap 4 + AdminLTE 3, jQuery. No SPA framework, no build step, no modules.
+- **Global init** (`js/app.js`): Select2 (`.select2`, bootstrap4 theme), TinyMCE (`.tinymce-simple`
+  with an unsaved-changes guard that is suppressed inside modals), input masks, alert auto-dismiss,
+  resubmit prevention via `history.replaceState`.
+- **Shared scripts** (`js/`): `ajax_modal.js` (the modal loader), `confirm_modal.js` (destructive
+  confirmations), `bulk_actions.js`, `date_filter.js`, `show_modals.js`, `pretty_content.js`,
+  `keepalive.js` (pings `keepalive.php` to hold the session), `login_prevent_resubmit.js`,
+  `credential_show_otp_via_id.js`, `guest_pay_invoice_stripe.js`, `autopay_setup_stripe.js`.
+- **Agent-only scripts** (`agent/js/`): ticket time tracking, ticket collision detection, kanban,
+  task modals, AI ticket summary, SSL certificate fetch, password generation/reveal, share modal.
+- **Styling:** `css/itflow_custom.css` (shared) and `agent/css/*` (page-specific). Theme accent comes
+  from `$config_theme`; dark mode from `$user_config_theme_dark` adding `dark-mode` to `<body>`.
+- **Conventions:** DataTables for lists; modals per module; **monospace for technical data** (IPs,
+  serials, keys) and proportional for human text; Font Awesome icons (`fa fa-fw fa-*`).
+  **Match the page you are standing in.**
+- **Security headers:** `includes/header.php` sends `X-Frame-Options: DENY` and
+  `<meta name="robots" content="noindex">`.
+
+---
+
+## 15. Change control
+
+### 15.1 Versioning
+
+- **App version** — `includes/app_version.php`, `APP_VERSION`, format `YY.MM` (`.v` for a second
+  release in a month). Updated when `develop` merges to `master`.
+- **Database version** — `LATEST_DATABASE_VERSION` derived from the highest-numbered file in
+  `admin/database_updates/`; the installed value lives in `settings.config_current_database_version`.
+  Rolling release, sequential, forward-only.
+- **Branches** — work lands on `develop`; `master` is the released branch that installs track via
+  `$repo_branch`.
+
+### 15.2 CI
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `.github/workflows/php-lint.yml` | Every PR | `overtrue/phplint` across the tree |
+| `.github/workflows/dbsql-lint.yml` | PRs touching `db.sql` | Imports `db.sql` into a live MariaDB and lists the tables |
+| SonarCloud | PRs | Static security analysis |
+| `.github/workflows/first-interaction.yml` | New contributors | Greeting |
+
+**Green checks are necessary, not sufficient.** The conventions in this document are checked by human
+review, and most review feedback is a restatement of something here.
+
+### 15.3 Manual verification
+
+There is no test suite. Verify by hand:
+
+1. **Fresh install** — import `db.sql` (or run `/setup/`) and exercise the changed path.
+2. **Upgrade** — if you touched schema, start from the previous version's database and run
+   `admin/database_updates.php` (via Settings > Update, or `scripts/update_cli.php --update_db`).
+3. **Permissions** — test as a non-admin role, and as a user with an allow list and with a deny row.
+4. **Client scoping** — try to reach another client's record by editing the id in the URL. It must
+   refuse.
+5. **Cron** — for a job change, run the script standalone (`php cron/<job>.php`) *and* under the
+   dispatcher, and confirm it is safe run twice.
+
+---
+
+## 16. Getting help
+
+- **Docs:** https://docs.itflow.org
+- **Forum:** https://forum.itflow.org — help, bugs, feature requests, discussion
+- **Security:** privately per `SECURITY.md`, never a public issue
+- **Rules:** `CONTRIBUTING.md` · **Conduct:** `CODE_OF_CONDUCT.md` · **History:** `CHANGELOG.md`
+
+> When in doubt about a convention, find the closest existing example in the codebase and follow it.
+> **Consistency beats novelty here.**
