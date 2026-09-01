@@ -62,6 +62,7 @@ if (!empty($client_id)) {
             $ticket_id = intval($ticket_row['ticket_id']);
             mysqli_query($mysqli, "DELETE FROM ticket_replies WHERE ticket_reply_ticket_id = $ticket_id");
             mysqli_query($mysqli, "DELETE FROM ticket_views WHERE view_ticket_id = $ticket_id");
+            mysqli_query($mysqli, "DELETE FROM ticket_timers WHERE timer_ticket_id = $ticket_id");
         }
         mysqli_query($mysqli, "DELETE FROM tickets WHERE ticket_client_id = $client_id");
         mysqli_query($mysqli, "DELETE FROM trips WHERE trip_client_id = $client_id");

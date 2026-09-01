@@ -980,6 +980,9 @@ if (isset($_GET['delete_ticket'])) {
         // Delete ticket watchers
         mysqli_query($mysqli, "DELETE FROM ticket_watchers WHERE watcher_ticket_id = $ticket_id");
 
+        // Delete Ticket Timers
+        mysqli_query($mysqli, "DELETE FROM ticket_timers WHERE timer_ticket_id = $ticket_id");
+
         // Delete Ticket Attachements
         mysqli_query($mysqli, "DELETE FROM ticket_attachments WHERE ticket_attachment_ticket_id = $ticket_id");
         removeDirectory("../uploads/tickets/$ticket_id");
@@ -1029,6 +1032,9 @@ if (isset($_POST['bulk_delete_tickets'])) {
 
             // Delete ticket watchers
             mysqli_query($mysqli, "DELETE FROM ticket_watchers WHERE watcher_ticket_id = $ticket_id");
+
+            // Delete Ticket Timers
+            mysqli_query($mysqli, "DELETE FROM ticket_timers WHERE timer_ticket_id = $ticket_id");
 
             // Delete Ticket Attachements
             mysqli_query($mysqli, "DELETE FROM ticket_attachments WHERE ticket_attachment_ticket_id = $ticket_id");

@@ -281,6 +281,7 @@ if (isset($_GET['delete_client'])) {
     mysqli_query($mysqli, "DELETE FROM domains WHERE domain_client_id = $client_id");
 
     mysqli_query($mysqli, "DELETE FROM calendar_events WHERE event_client_id = $client_id");
+    mysqli_query($mysqli, "DELETE FROM ticket_timers WHERE timer_ticket_id IN (SELECT ticket_id FROM tickets WHERE ticket_client_id = $client_id)");
     mysqli_query($mysqli, "DELETE FROM files WHERE file_client_id = $client_id");
     mysqli_query($mysqli, "DELETE FROM folders WHERE folder_client_id = $client_id");
 
