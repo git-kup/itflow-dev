@@ -2358,6 +2358,7 @@ CREATE TABLE `settings` (
   `config_ticket_new_ticket_notification_email` varchar(200) DEFAULT NULL,
   `config_ticket_default_billable` tinyint(1) NOT NULL DEFAULT 0,
   `config_ticket_timer_autostart` tinyint(1) NOT NULL DEFAULT 0,
+  `config_ticket_timer_mode` tinyint(1) NOT NULL DEFAULT 0,
   `config_enable_cron` tinyint(1) NOT NULL DEFAULT 0,
   `config_recurring_auto_send_invoice` tinyint(1) NOT NULL DEFAULT 1,
   `config_enable_alert_domain_expire` tinyint(1) NOT NULL DEFAULT 1,
@@ -2865,6 +2866,26 @@ CREATE TABLE `ticket_statuses` (
   `ticket_status_pauses_sla` tinyint(1) NOT NULL DEFAULT 0,
   `ticket_status_order` int(11) NOT NULL DEFAULT 0,
   PRIMARY KEY (`ticket_status_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `ticket_timers`
+--
+
+DROP TABLE IF EXISTS `ticket_timers`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `ticket_timers` (
+  `timer_id` int(11) NOT NULL AUTO_INCREMENT,
+  `timer_started_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `timer_stopped_at` datetime DEFAULT NULL,
+  `timer_applied_at` datetime DEFAULT NULL,
+  `timer_ticket_id` int(11) NOT NULL,
+  `timer_user_id` int(11) NOT NULL,
+  PRIMARY KEY (`timer_id`),
+  KEY `timer_user_id` (`timer_user_id`,`timer_stopped_at`),
+  KEY `timer_ticket_id` (`timer_ticket_id`,`timer_user_id`,`timer_applied_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 

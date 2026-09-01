@@ -57,6 +57,18 @@ require_once "includes/inc_all_admin.php";
                 </div>
 
                 <div class="mb-3">
+                    <label>Ticket Timer Type</label>
+                    <div class="input-group">
+                            <span class="input-group-text"><i class="fa fa-fw fa-hourglass-half"></i></span>
+                        <select class="form-select" name="config_ticket_timer_mode">
+                            <option value="0" <?php if ($config_ticket_timer_mode == 0) { echo "selected"; } ?>>Stopwatch - counts in the browser while the ticket is open</option>
+                            <option value="1" <?php if ($config_ticket_timer_mode == 1) { echo "selected"; } ?>>Clock in / Clock out - runs on the server and is visible to everyone</option>
+                        </select>
+                    </div>
+                    <small class="text-secondary">A clock keeps running when the tab is closed and shows in the navbar, so a ticket someone is already working on is visible to the rest of the team. Autostart above applies to the stopwatch only.</small>
+                </div>
+
+                <div class="mb-3">
                     <label>Number of hours to auto close resolved tickets</label>
                     <div class="input-group">
                             <span class="input-group-text"><i class="fa fa-fw fa-clock"></i></span>

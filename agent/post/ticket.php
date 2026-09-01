@@ -1862,6 +1862,13 @@ if (isset($_POST['add_ticket_reply'])) {
     $seconds = intval($_POST['seconds']);
     $ticket_reply_time_worked = escapeSql(sprintf("%02d:%02d:%02d", $hours, $minutes, $seconds));
 
+    // Clock in / clock out segments that fed these fields are now recorded on the
+    // reply, so they must not prefill the next one. A still-running clock is left
+    // alone - that time belongs to whatever the technician logs next.
+    if ($config_ticket_timer_mode == 1) {
+        ticketTimerMarkApplied($ticket_id, $session_user_id);
+    }
+
     // Defaults
     $send_email = 0;
     $ticket_reply_id = 0;

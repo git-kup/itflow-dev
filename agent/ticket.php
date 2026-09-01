@@ -130,6 +130,37 @@ if (isset($_GET['ticket_id'])) {
         $ticket_is_open = !$ticket_is_resolved && !$ticket_is_closed;
         $can_edit_ticket = lookupUserPermission("module_support") >= 2;
 
+        // Clock in / clock out state for this user on this ticket. The stopwatch
+        // mode leaves all of this empty and the fields are filled by the browser,
+        // exactly as before.
+        $ticket_timer_running_id = 0;
+        $ticket_timer_started_at = '';
+        $ticket_timer_banked = '';
+        $ticket_timer_hours = '';
+        $ticket_timer_minutes = '';
+        $ticket_timer_seconds = '';
+
+        if ($config_ticket_timer_mode == 1) {
+
+            $timer_row = mysqli_fetch_assoc(mysqli_query($mysqli, "SELECT timer_id, timer_started_at FROM ticket_timers WHERE timer_ticket_id = $ticket_id AND timer_user_id = $session_user_id AND timer_stopped_at IS NULL LIMIT 1"));
+
+            if ($timer_row) {
+                $ticket_timer_running_id = intval($timer_row['timer_id']);
+                $ticket_timer_started_at = escapeHtml($timer_row['timer_started_at']);
+            }
+
+            // Segments already clocked but not yet written into a reply. These
+            // prefill the fields so a clock out is one press away from being logged.
+            $ticket_timer_unapplied = ticketTimerUnappliedSeconds($ticket_id, $session_user_id);
+
+            if ($ticket_timer_unapplied) {
+                $ticket_timer_banked = escapeHtml(secondsToTime($ticket_timer_unapplied));
+                $ticket_timer_hours = sprintf("%02d", intdiv($ticket_timer_unapplied, 3600));
+                $ticket_timer_minutes = sprintf("%02d", intdiv($ticket_timer_unapplied % 3600, 60));
+                $ticket_timer_seconds = sprintf("%02d", $ticket_timer_unapplied % 60);
+            }
+        }
+
         $ticket_assigned_to = intval($ticket['ticket_assigned_to']);
         if (empty($ticket_assigned_to)) {
             $ticket_assigned_to_display = "<span class='text-danger'><i class='fas fa-fw fa-user-slash me-1'></i>Unassigned</span>";
@@ -818,12 +849,25 @@ if (isset($_GET['ticket_id'])) {
                                                 <div class="mb-3 mb-md-0">
                                                     <label class="text-secondary small mb-1">Time worked</label>
                                                     <div class="input-group">
-                                                        <input type="text" class="form-control" inputmode="numeric" id="hours" name="hours" placeholder="Hrs" min="0" max="23" pattern="0?[0-9]|1[0-9]|2[0-3]">
-                                                        <input type="text" class="form-control" inputmode="numeric" id="minutes" name="minutes" placeholder="Mins" min="0" max="59" pattern="[0-5]?[0-9]">
-                                                        <input type="text" class="form-control" inputmode="numeric" id="seconds" name="seconds" placeholder="Secs" min="0" max="59" pattern="[0-5]?[0-9]">
+                                                        <input type="text" class="form-control" inputmode="numeric" id="hours" name="hours" placeholder="Hrs" min="0" max="23" pattern="0?[0-9]|1[0-9]|2[0-3]" value="<?= $ticket_timer_hours ?>">
+                                                        <input type="text" class="form-control" inputmode="numeric" id="minutes" name="minutes" placeholder="Mins" min="0" max="59" pattern="[0-5]?[0-9]" value="<?= $ticket_timer_minutes ?>">
+                                                        <input type="text" class="form-control" inputmode="numeric" id="seconds" name="seconds" placeholder="Secs" min="0" max="59" pattern="[0-5]?[0-9]" value="<?= $ticket_timer_seconds ?>">
+                                                        <?php if ($config_ticket_timer_mode == 1) { ?>
+                                                            <?php if ($ticket_timer_running_id) { ?>
+                                                                <a class="btn btn-danger" href="post.php?stop_ticket_timer=<?= $ticket_timer_running_id ?>&csrf_token=<?= $_SESSION['csrf_token'] ?>" title="Clock out"><i class="fas fa-fw fa-stop me-2"></i>Clock out</a>
+                                                            <?php } else { ?>
+                                                                <a class="btn btn-light" href="post.php?start_ticket_timer=<?= $ticket_id ?>&csrf_token=<?= $_SESSION['csrf_token'] ?>" title="Clock in"><i class="fas fa-fw fa-hourglass-start me-2"></i>Clock in</a>
+                                                            <?php } ?>
+                                                        <?php } else { ?>
                                                             <button type="button" class="btn btn-light" id="startStopTimer" title="Start / stop timer"><i class="fas fa-play"></i></button>
                                                             <button type="button" class="btn btn-light" id="resetTimer" title="Reset timer"><i class="fas fa-redo-alt"></i></button>
+                                                        <?php } ?>
                                                     </div>
+                                                    <?php if ($config_ticket_timer_mode == 1 && $ticket_timer_running_id) { ?>
+                                                        <small class="text-secondary">Clocked in <span class="font-monospace" id="ticketClockElapsed" data-started-at="<?= $ticket_timer_started_at ?>" data-server-now="<?= date('Y-m-d H:i:s') ?>">00:00:00</span> ago<?php if ($ticket_timer_banked) { ?> &middot; <?= $ticket_timer_banked ?> already banked<?php } ?></small>
+                                                    <?php } elseif ($config_ticket_timer_mode == 1 && $ticket_timer_banked) { ?>
+                                                        <small class="text-secondary"><?= $ticket_timer_banked ?> clocked and ready to log</small>
+                                                    <?php } ?>
                                                 </div>
                                             </div>
 
@@ -1448,6 +1492,10 @@ require_once "../includes/footer.php";
 <script src="/js/show_modals.js"></script>
 
 <?php if (empty($ticket_closed_at)) { ?>
+    <?php if ($config_ticket_timer_mode == 1) { ?>
+        <!-- Ticket clock in / clock out JS - the elapsed label ticks from the server start time -->
+        <script src="js/ticket_clock.js"></script>
+    <?php } else { ?>
     <!-- create js variable related to ticket timer setting -->
     <script type="text/javascript">
         var ticketAutoStart = <?= json_encode($config_ticket_timer_autostart) ?>;
@@ -1455,6 +1503,7 @@ require_once "../includes/footer.php";
 
     <!-- Ticket Time Tracking JS -->
     <script src="js/ticket_time_tracking.js"></script>
+    <?php } ?>
 
     <!-- Ticket collision detect JS (jQuery is called in footer, so collision detection script MUST be below it) -->
     <script src="js/ticket_collision_detection.js"></script>
