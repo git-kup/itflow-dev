@@ -11,7 +11,8 @@
 # It installs through scripts/setup_cli.php rather than seeding tables by hand,
 # so the documented install path is the one being exercised.
 #
-# Safe to run repeatedly: every step checks for the state it would create.
+# Safe to run repeatedly: every step checks for the state it would create, and
+# the checks are on the state itself rather than on a marker that implies it.
 
 set -euo pipefail
 
@@ -27,6 +28,35 @@ DB_USER="itflow"
 DB_PASS="itflow"
 APP_HOST="127.0.0.1"
 APP_PORT="8080"
+APP_URL="http://$APP_HOST:$APP_PORT"
+
+fail() {
+    echo "session-start: $1" >&2
+    exit 1
+}
+
+# True when the app answers with a real page, not merely when the port accepts a
+# connection - a PHP fatal still completes a TCP handshake and returns a 500.
+app_is_up() {
+    [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '*' \
+        "$APP_URL/login.php" 2>/dev/null)" = "200" ]
+}
+
+# The schema, not config.php, is what proves an install finished. setup_cli.php
+# writes config.php before it imports db.sql and then refuses to run while
+# config.php exists, so a half-finished install would otherwise look done to
+# every later session and could never repair itself.
+install_is_complete() {
+    [ -f "$PROJECT_DIR/config.php" ] &&
+        [ "$(mysql "$DB_NAME" -N -B -e \
+            "SELECT COUNT(*) FROM settings WHERE company_id = 1;" 2>/dev/null)" = "1" ]
+}
+
+# --- PHP ---------------------------------------------------------------------
+
+for ext in mysqli mbstring gd curl zip intl openssl; do
+    php -m | grep -qx "$ext" || fail "PHP extension '$ext' is missing - ITFlow needs it."
+done
 
 # --- Database server ---------------------------------------------------------
 
@@ -34,7 +64,8 @@ if ! command -v mariadbd >/dev/null 2>&1 && ! command -v mysqld >/dev/null 2>&1;
     echo "Installing MariaDB server..."
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq mariadb-server >/dev/null
+    apt-get install -y -qq mariadb-server >/dev/null ||
+        fail "apt-get could not install mariadb-server."
 fi
 
 # No systemd in the container, so mysqld_safe is started directly.
@@ -49,10 +80,7 @@ if ! mysqladmin ping >/dev/null 2>&1; then
     done
 fi
 
-if ! mysqladmin ping >/dev/null 2>&1; then
-    echo "MariaDB failed to start - see /tmp/mysqld.log" >&2
-    exit 1
-fi
+mysqladmin ping >/dev/null 2>&1 || fail "MariaDB did not start - see /tmp/mysqld.log"
 
 mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4;
     CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -60,8 +88,17 @@ mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4;
 
 # --- ITFlow install ----------------------------------------------------------
 
-# config.php is gitignored, so its absence is what marks an uninstalled tree.
-if [ ! -f "$PROJECT_DIR/config.php" ]; then
+if ! install_is_complete; then
+
+    # Clear a partial install out of the way. The installer aborts rather than
+    # overwrites, so leaving either half behind means it will not run at all.
+    if [ -f "$PROJECT_DIR/config.php" ]; then
+        echo "Previous install is incomplete - reinstalling..."
+        rm -f "$PROJECT_DIR/config.php"
+        mysql -e "DROP DATABASE \`$DB_NAME\`; CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4;
+            GRANT ALL ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';"
+    fi
+
     echo "Installing ITFlow (scripts/setup_cli.php)..."
     (
         cd "$PROJECT_DIR/scripts"
@@ -79,32 +116,42 @@ if [ ! -f "$PROJECT_DIR/config.php" ]; then
             --user-name="Dev Tester" \
             --user-email="dev@example.com" \
             --user-password="devpassword123" \
-            --non-interactive >/dev/null
-    )
+            --non-interactive >/tmp/itflow-setup.log 2>&1
+    ) || fail "setup_cli.php failed - see /tmp/itflow-setup.log"
 
     # The installer assumes https. The sandbox serves plain http, and
     # $config_https_only marks the session cookie Secure, which would make
     # every login silently fail to stick.
     sed -i "s/\$config_https_only = TRUE;/\$config_https_only = FALSE;/" "$PROJECT_DIR/config.php"
+
+    install_is_complete || fail "install finished but the schema is not there - see /tmp/itflow-setup.log"
 fi
 
 # --- Web server --------------------------------------------------------------
 
-if ! curl -s --noproxy '*' -o /dev/null "http://$APP_HOST:$APP_PORT/login.php"; then
-    echo "Serving ITFlow on http://$APP_HOST:$APP_PORT ..."
+if ! app_is_up; then
+    echo "Serving ITFlow on $APP_URL ..."
     setsid php -S "$APP_HOST:$APP_PORT" -t "$PROJECT_DIR" \
         >/tmp/php-server.log 2>&1 < /dev/null &
-    for _ in $(seq 1 15); do
-        curl -s --noproxy '*' -o /dev/null "http://$APP_HOST:$APP_PORT/login.php" && break
+    for _ in $(seq 1 20); do
+        app_is_up && break
         sleep 1
     done
 fi
+
+# --- Health check ------------------------------------------------------------
+#
+# Everything above is reported as done only once it is verified. A hook that
+# announces a working stack it has not checked is worse than one that fails.
+
+app_is_up || fail "the app is not answering on $APP_URL - see /tmp/php-server.log"
+install_is_complete || fail "the database is not installed."
 
 # --- Session environment -----------------------------------------------------
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     {
-        echo "export ITFLOW_URL=\"http://$APP_HOST:$APP_PORT\""
+        echo "export ITFLOW_URL=\"$APP_URL\""
         echo "export ITFLOW_DB=\"$DB_NAME\""
         echo "export ITFLOW_USER=\"dev@example.com\""
         echo "export ITFLOW_PASS=\"devpassword123\""
@@ -113,11 +160,11 @@ fi
 
 cat <<EOF
 
-ITFlow dev stack ready.
+ITFlow dev stack ready (verified: app answering, schema installed).
 
-  App    http://$APP_HOST:$APP_PORT  (dev@example.com / devpassword123)
+  App    $APP_URL  (dev@example.com / devpassword123)
   DB     mysql $DB_NAME
-  Logs   /tmp/php-server.log, /tmp/mysqld.log
+  Logs   /tmp/php-server.log, /tmp/mysqld.log, /tmp/itflow-setup.log
 
   Lint   find . -path ./libs -prune -o -name '*.php' -print | xargs -n 20 php -l
   Schema mysql -e 'DROP DATABASE IF EXISTS itflow_lint; CREATE DATABASE itflow_lint;' \\
