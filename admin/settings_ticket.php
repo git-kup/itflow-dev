@@ -57,6 +57,28 @@ require_once "includes/inc_all_admin.php";
                 </div>
 
                 <div class="mb-3">
+                    <label>Ticket Timer Type</label>
+                    <div class="input-group">
+                            <span class="input-group-text"><i class="fa fa-fw fa-hourglass-half"></i></span>
+                        <select class="form-select" name="config_ticket_timer_mode">
+                            <option value="0" <?php if ($config_ticket_timer_mode == 0) { echo "selected"; } ?>>Stopwatch - counts in the browser while the ticket is open</option>
+                            <option value="1" <?php if ($config_ticket_timer_mode == 1) { echo "selected"; } ?>>Clock in / Clock out - runs on the server and is visible to everyone</option>
+                        </select>
+                    </div>
+                    <small class="text-secondary">A clock keeps running when the tab is closed and shows in the navbar, so a ticket someone is already working on is visible to the rest of the team. Autostart above applies to the stopwatch only.</small>
+                </div>
+
+                <div class="mb-3">
+                    <label>Keep clocked out tickets in the timer list for</label>
+                    <div class="input-group">
+                            <span class="input-group-text"><i class="fa fa-fw fa-hourglass-end"></i></span>
+                        <input type="number" min="0" max="1440" class="form-control" name="config_ticket_timer_clocked_out_minutes" placeholder="Minutes a clocked out ticket stays listed" value="<?= intval($config_ticket_timer_clocked_out_minutes) ?>">
+                        <span class="input-group-text">minutes</span>
+                    </div>
+                    <small class="text-secondary">Clocking out is often followed by clocking straight back in, so the ticket stays in the list with a resume button for this long. Only your own clocked out tickets linger. 0 removes them immediately. Applies to the clock in / clock out timer only.</small>
+                </div>
+
+                <div class="mb-3">
                     <label>Number of hours to auto close resolved tickets</label>
                     <div class="input-group">
                             <span class="input-group-text"><i class="fa fa-fw fa-clock"></i></span>

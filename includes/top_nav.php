@@ -70,6 +70,30 @@
             </a>
         </li>
 
+        <!-- Running Ticket Timers Dropdown - clock in / clock out mode only -->
+        <?php if ($config_ticket_timer_mode == 1) {
+
+            $row = mysqli_fetch_assoc(mysqli_query($mysqli, "SELECT COUNT(timer_id) AS num FROM ticket_timers
+                LEFT JOIN tickets ON timer_ticket_id = ticket_id
+                WHERE timer_stopped_at IS NULL
+                " . clientScopeSql('ticket_client_id') . ""));
+            $num_running_timers = $row['num'];
+
+            ?>
+
+        <li class="nav-item">
+            <a class="nav-link ajax-modal" href="#" data-modal-url="/modals/ticket_timers.php" title="Running timers">
+                <i class="fas fa-hourglass-half"></i>
+                <?php if ($num_running_timers) { ?>
+                <span class="badge bg-success text-white rounded-pill navbar-badge">
+                    <?= $num_running_timers ?>
+                </span>
+                <?php } ?>
+            </a>
+        </li>
+
+        <?php } ?>
+
         <li class="nav-item dropdown user-menu">
             <a href="#" class="nav-link" data-bs-toggle="dropdown">
                 <?php if (empty($session_avatar)) { ?>

@@ -23,6 +23,7 @@ require_once __DIR__ . '/functions/logging.php';
 require_once __DIR__ . '/functions/app.php';
 require_once __DIR__ . '/functions/payments.php';
 require_once __DIR__ . '/functions/sla.php';
+require_once __DIR__ . '/functions/ticket_timer.php';
 require_once __DIR__ . '/functions/ai.php';
 require_once __DIR__ . '/functions/export.php';
 require_once __DIR__ . '/functions/calendar.php';

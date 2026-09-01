@@ -980,6 +980,9 @@ if (isset($_GET['delete_ticket'])) {
         // Delete ticket watchers
         mysqli_query($mysqli, "DELETE FROM ticket_watchers WHERE watcher_ticket_id = $ticket_id");
 
+        // Delete Ticket Timers
+        mysqli_query($mysqli, "DELETE FROM ticket_timers WHERE timer_ticket_id = $ticket_id");
+
         // Delete Ticket Attachements
         mysqli_query($mysqli, "DELETE FROM ticket_attachments WHERE ticket_attachment_ticket_id = $ticket_id");
         removeDirectory("../uploads/tickets/$ticket_id");
@@ -1029,6 +1032,9 @@ if (isset($_POST['bulk_delete_tickets'])) {
 
             // Delete ticket watchers
             mysqli_query($mysqli, "DELETE FROM ticket_watchers WHERE watcher_ticket_id = $ticket_id");
+
+            // Delete Ticket Timers
+            mysqli_query($mysqli, "DELETE FROM ticket_timers WHERE timer_ticket_id = $ticket_id");
 
             // Delete Ticket Attachements
             mysqli_query($mysqli, "DELETE FROM ticket_attachments WHERE ticket_attachment_ticket_id = $ticket_id");
@@ -1315,6 +1321,10 @@ if (isset($_POST['bulk_merge_tickets'])) {
                 }
                 mysqli_query($mysqli, "INSERT INTO ticket_replies SET ticket_reply = 'Ticket $ticket_prefix$ticket_number bulk merged into <a href=\"ticket.php?ticket_id=$merge_into_ticket_id\">$ticket_prefix$merge_into_ticket_number</a>. Comment: $merge_comment', ticket_reply_time_worked = '00:00:00', ticket_reply_type = '$ticket_reply_type', ticket_reply_by = $session_user_id, ticket_reply_ticket_id = $ticket_id");
                 mysqli_query($mysqli, "UPDATE tickets SET ticket_status = '5', ticket_resolved_at = NOW(), ticket_closed_at = NOW(), ticket_closed_by = $session_user_id WHERE ticket_id = $ticket_id") or die(mysqli_error($mysqli));
+
+                // A closed ticket is immutable and has no reply form, so a clock left
+                // running on it could never be stopped from the ticket itself.
+                ticketTimerStopRunning($ticket_id);
                 syncTicketSlaClock($ticket_id);
                 setTicketResolutionSlaMet($ticket_id);
 
@@ -1862,6 +1872,13 @@ if (isset($_POST['add_ticket_reply'])) {
     $seconds = intval($_POST['seconds']);
     $ticket_reply_time_worked = escapeSql(sprintf("%02d:%02d:%02d", $hours, $minutes, $seconds));
 
+    // Clock in / clock out segments that fed these fields are now recorded on the
+    // reply, so they must not prefill the next one. A still-running clock is left
+    // alone - that time belongs to whatever the technician logs next.
+    if ($config_ticket_timer_mode == 1) {
+        ticketTimerMarkApplied($ticket_id, $session_user_id);
+    }
+
     // Defaults
     $send_email = 0;
     $ticket_reply_id = 0;
@@ -2267,6 +2284,10 @@ if (isset($_POST['merge_ticket'])) {
     mysqli_query($mysqli, "INSERT INTO ticket_replies SET ticket_reply = 'Ticket $ticket_prefix$ticket_number merged into <a href=\"ticket.php?ticket_id=$merge_into_ticket_id\">$ticket_prefix$merge_into_ticket_number</a>. Comment: $merge_comment', ticket_reply_time_worked = '00:00:00', ticket_reply_type = '$ticket_reply_type', ticket_reply_by = $session_user_id, ticket_reply_ticket_id = $ticket_id");
 
     mysqli_query($mysqli, "UPDATE tickets SET ticket_status = '5', ticket_resolved_at = NOW(), ticket_closed_at = NOW(), ticket_closed_by = $session_user_id WHERE ticket_id = $ticket_id") or die(mysqli_error($mysqli));
+
+    // A closed ticket is immutable and has no reply form, so a clock left
+    // running on it could never be stopped from the ticket itself.
+    ticketTimerStopRunning($ticket_id);
     syncTicketSlaClock($ticket_id);
     setTicketResolutionSlaMet($ticket_id);
 
@@ -2449,6 +2470,10 @@ if (isset($_GET['close_ticket'])) {
     }
 
     mysqli_query($mysqli, "UPDATE tickets SET ticket_status = 5, ticket_closed_at = NOW(), ticket_closed_by = $session_user_id WHERE ticket_id = $ticket_id") or die(mysqli_error($mysqli));
+
+    // A closed ticket is immutable and has no reply form, so a clock left
+    // running on it could never be stopped from the ticket itself.
+    ticketTimerStopRunning($ticket_id);
     syncTicketSlaClock($ticket_id);
     setTicketResolutionSlaMet($ticket_id);
 

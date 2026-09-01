@@ -31,6 +31,10 @@ if (!empty($ticket_id)) {
         // Close
         $update_sql = mysqli_query($mysqli, "UPDATE tickets SET ticket_status = 5, ticket_closed_at = NOW(), ticket_closed_by = $api_key_user_id WHERE ticket_id = $ticket_id AND ticket_client_id = $client_id LIMIT 1");
 
+        // A closed ticket is immutable and has no reply form, so a clock left
+        // running on it could never be stopped from the ticket itself.
+        ticketTimerStopRunning($ticket_id);
+
         // Check insert & get insert ID
         if ($update_sql) {
             $update_count = mysqli_affected_rows($mysqli);
