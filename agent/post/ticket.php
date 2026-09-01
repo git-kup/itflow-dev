@@ -1321,6 +1321,10 @@ if (isset($_POST['bulk_merge_tickets'])) {
                 }
                 mysqli_query($mysqli, "INSERT INTO ticket_replies SET ticket_reply = 'Ticket $ticket_prefix$ticket_number bulk merged into <a href=\"ticket.php?ticket_id=$merge_into_ticket_id\">$ticket_prefix$merge_into_ticket_number</a>. Comment: $merge_comment', ticket_reply_time_worked = '00:00:00', ticket_reply_type = '$ticket_reply_type', ticket_reply_by = $session_user_id, ticket_reply_ticket_id = $ticket_id");
                 mysqli_query($mysqli, "UPDATE tickets SET ticket_status = '5', ticket_resolved_at = NOW(), ticket_closed_at = NOW(), ticket_closed_by = $session_user_id WHERE ticket_id = $ticket_id") or die(mysqli_error($mysqli));
+
+                // A closed ticket is immutable and has no reply form, so a clock left
+                // running on it could never be stopped from the ticket itself.
+                ticketTimerStopRunning($ticket_id);
                 syncTicketSlaClock($ticket_id);
                 setTicketResolutionSlaMet($ticket_id);
 
@@ -2280,6 +2284,10 @@ if (isset($_POST['merge_ticket'])) {
     mysqli_query($mysqli, "INSERT INTO ticket_replies SET ticket_reply = 'Ticket $ticket_prefix$ticket_number merged into <a href=\"ticket.php?ticket_id=$merge_into_ticket_id\">$ticket_prefix$merge_into_ticket_number</a>. Comment: $merge_comment', ticket_reply_time_worked = '00:00:00', ticket_reply_type = '$ticket_reply_type', ticket_reply_by = $session_user_id, ticket_reply_ticket_id = $ticket_id");
 
     mysqli_query($mysqli, "UPDATE tickets SET ticket_status = '5', ticket_resolved_at = NOW(), ticket_closed_at = NOW(), ticket_closed_by = $session_user_id WHERE ticket_id = $ticket_id") or die(mysqli_error($mysqli));
+
+    // A closed ticket is immutable and has no reply form, so a clock left
+    // running on it could never be stopped from the ticket itself.
+    ticketTimerStopRunning($ticket_id);
     syncTicketSlaClock($ticket_id);
     setTicketResolutionSlaMet($ticket_id);
 
@@ -2462,6 +2470,10 @@ if (isset($_GET['close_ticket'])) {
     }
 
     mysqli_query($mysqli, "UPDATE tickets SET ticket_status = 5, ticket_closed_at = NOW(), ticket_closed_by = $session_user_id WHERE ticket_id = $ticket_id") or die(mysqli_error($mysqli));
+
+    // A closed ticket is immutable and has no reply form, so a clock left
+    // running on it could never be stopped from the ticket itself.
+    ticketTimerStopRunning($ticket_id);
     syncTicketSlaClock($ticket_id);
     setTicketResolutionSlaMet($ticket_id);
 

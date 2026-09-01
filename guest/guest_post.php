@@ -201,6 +201,10 @@ if (isset($_GET['close_ticket'], $_GET['url_key'])) {
 
         // Update the ticket
         mysqli_query($mysqli, "UPDATE tickets SET ticket_status = 5, ticket_closed_at = NOW() WHERE ticket_id = $ticket_id AND ticket_url_key = '$url_key'");
+
+        // A closed ticket is immutable and has no reply form, so a clock left
+        // running on it could never be stopped from the ticket itself.
+        ticketTimerStopRunning($ticket_id);
         logTicketHistory($ticket_id, "The client closed the ticket from the guest link");
 
         // Add reply

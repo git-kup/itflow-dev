@@ -545,6 +545,10 @@ while ($row = mysqli_fetch_assoc($sql_resolved_tickets_to_close)) {
     mysqli_query($mysqli,"UPDATE tickets SET ticket_status = 5, ticket_closed_at = NOW(), ticket_closed_by = $ticket_assigned_to WHERE ticket_id = $ticket_id");
     syncTicketSlaClock($ticket_id);
 
+    // A closed ticket is immutable and has no reply form, so a clock left
+    // running on it could never be stopped from the ticket itself.
+    ticketTimerStopRunning($ticket_id);
+
     //Logging
     logTicketHistory($ticket_id, "Automatically closed after $config_ticket_autoclose_hours hours with no activity");
 

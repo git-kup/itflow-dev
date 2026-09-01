@@ -50,3 +50,23 @@ function ticketTimerMarkApplied($ticket_id, $user_id) {
         AND timer_stopped_at IS NOT NULL
         AND timer_applied_at IS NULL");
 }
+
+/*
+ * Stop any clock still running on a ticket. Called wherever a ticket is closed -
+ * a closed ticket is immutable and its reply form is gone, so a clock left
+ * running there can never be stopped from the ticket itself and would sit in the
+ * navbar forever.
+ *
+ * The segment is kept rather than discarded: the technician did that work, and it
+ * stays unapplied so it is still theirs to log against another ticket or to see
+ * in the record.
+ */
+function ticketTimerStopRunning($ticket_id) {
+    global $mysqli;
+
+    $ticket_id = intval($ticket_id);
+
+    mysqli_query($mysqli, "UPDATE ticket_timers SET timer_stopped_at = NOW()
+        WHERE timer_ticket_id = $ticket_id
+        AND timer_stopped_at IS NULL");
+}
