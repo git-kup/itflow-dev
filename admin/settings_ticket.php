@@ -69,6 +69,16 @@ require_once "includes/inc_all_admin.php";
                 </div>
 
                 <div class="mb-3">
+                    <label>Keep clocked out tickets in the timer list for</label>
+                    <div class="input-group">
+                            <span class="input-group-text"><i class="fa fa-fw fa-hourglass-end"></i></span>
+                        <input type="number" min="0" max="1440" class="form-control" name="config_ticket_timer_clocked_out_minutes" placeholder="Minutes a clocked out ticket stays listed" value="<?= intval($config_ticket_timer_clocked_out_minutes) ?>">
+                        <span class="input-group-text">minutes</span>
+                    </div>
+                    <small class="text-secondary">Clocking out is often followed by clocking straight back in, so the ticket stays in the list with a resume button for this long. Only your own clocked out tickets linger. 0 removes them immediately. Applies to the clock in / clock out timer only.</small>
+                </div>
+
+                <div class="mb-3">
                     <label>Number of hours to auto close resolved tickets</label>
                     <div class="input-group">
                             <span class="input-group-text"><i class="fa fa-fw fa-clock"></i></span>

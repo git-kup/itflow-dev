@@ -2359,6 +2359,7 @@ CREATE TABLE `settings` (
   `config_ticket_default_billable` tinyint(1) NOT NULL DEFAULT 0,
   `config_ticket_timer_autostart` tinyint(1) NOT NULL DEFAULT 0,
   `config_ticket_timer_mode` tinyint(1) NOT NULL DEFAULT 0,
+  `config_ticket_timer_clocked_out_minutes` int(11) NOT NULL DEFAULT 15,
   `config_enable_cron` tinyint(1) NOT NULL DEFAULT 0,
   `config_recurring_auto_send_invoice` tinyint(1) NOT NULL DEFAULT 1,
   `config_enable_alert_domain_expire` tinyint(1) NOT NULL DEFAULT 1,
