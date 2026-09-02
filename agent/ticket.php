@@ -140,13 +140,18 @@ if (isset($_GET['ticket_id'])) {
         $ticket_timer_minutes = '';
         $ticket_timer_seconds = '';
 
+        $ticket_timer_started_at_display = '';
+        $ticket_timer_elapsed_seconds = 0;
+        $ticket_timer_elapsed_display = '00:00:00';
+
         if ($config_ticket_timer_mode == 1) {
 
-            $timer_row = mysqli_fetch_assoc(mysqli_query($mysqli, "SELECT timer_id, timer_started_at FROM ticket_timers WHERE timer_ticket_id = $ticket_id AND timer_user_id = $session_user_id AND timer_stopped_at IS NULL LIMIT 1"));
+            $timer_row = mysqli_fetch_assoc(mysqli_query($mysqli, "SELECT timer_id, timer_started_at, TIMESTAMPDIFF(SECOND, timer_started_at, NOW()) AS running_seconds FROM ticket_timers WHERE timer_ticket_id = $ticket_id AND timer_user_id = $session_user_id AND timer_stopped_at IS NULL LIMIT 1"));
 
             if ($timer_row) {
                 $ticket_timer_running_id = intval($timer_row['timer_id']);
                 $ticket_timer_started_at = escapeHtml($timer_row['timer_started_at']);
+                $ticket_timer_started_at_display = date('M d g:ia', strtotime($timer_row['timer_started_at']));
             }
 
             // Segments already clocked but not yet written into a reply. These
@@ -159,6 +164,18 @@ if (isset($_GET['ticket_id'])) {
                 $ticket_timer_minutes = sprintf("%02d", intdiv($ticket_timer_unapplied % 3600, 60));
                 $ticket_timer_seconds = sprintf("%02d", $ticket_timer_unapplied % 60);
             }
+
+            // The card's big figure is whichever number its caption is about: the stint
+            // in progress while the clock runs, and what is banked and waiting to be
+            // logged once it stops. Mixing the two under one label reads as a stint that
+            // has been going far longer than it has.
+            if ($ticket_timer_running_id) {
+                $ticket_timer_elapsed_seconds = intval($timer_row['running_seconds']);
+            } else {
+                $ticket_timer_elapsed_seconds = $ticket_timer_unapplied;
+            }
+
+            $ticket_timer_elapsed_display = sprintf("%02d:%02d:%02d", intdiv($ticket_timer_elapsed_seconds, 3600), intdiv($ticket_timer_elapsed_seconds % 3600, 60), $ticket_timer_elapsed_seconds % 60);
         }
 
         $ticket_assigned_to = intval($ticket['ticket_assigned_to']);
@@ -304,6 +321,54 @@ if (isset($_GET['ticket_id'])) {
             AND ticket_reply_archived_at IS NULL
             ORDER BY ticket_reply_id DESC"
         );
+
+        /*
+         * Clock in / clock out events for the conversation timeline. Each segment is
+         * up to two events - it started, and if it has finished, it stopped - so they
+         * are flattened here and merged into the reply list as it renders.
+         *
+         * Everyone's segments are listed: the point of the timeline is who was on this
+         * ticket and when, which is not a question about the reader.
+         */
+        $ticket_timer_events = [];
+        $ticket_timer_running_seconds = 0;
+        $ticket_has_running_timer = false;
+
+        if ($config_ticket_timer_mode == 1) {
+
+            $sql_timer_events = mysqli_query($mysqli, "SELECT timer_started_at, timer_stopped_at, user_name,
+                TIMESTAMPDIFF(SECOND, timer_started_at, NOW()) AS running_seconds FROM ticket_timers
+                LEFT JOIN users ON timer_user_id = user_id
+                WHERE timer_ticket_id = $ticket_id");
+
+            while ($timer_event_row = mysqli_fetch_assoc($sql_timer_events)) {
+
+                $timer_event_user = escapeHtml($timer_event_row['user_name']);
+
+                if (empty($timer_event_row['timer_stopped_at'])) {
+                    $ticket_has_running_timer = true;
+                    $ticket_timer_running_seconds = max($ticket_timer_running_seconds, intval($timer_event_row['running_seconds']));
+                } else {
+                    $ticket_timer_events[] = [
+                        'at' => $timer_event_row['timer_stopped_at'],
+                        'type' => 'out',
+                        'user' => $timer_event_user
+                    ];
+                }
+
+                $ticket_timer_events[] = [
+                    'at' => $timer_event_row['timer_started_at'],
+                    'type' => 'in',
+                    'user' => $timer_event_user
+                ];
+            }
+
+            // Newest first, matching the reply order the conversation already uses.
+            // The stored format sorts correctly as a string, so no date parsing.
+            usort($ticket_timer_events, function ($a, $b) {
+                return strcmp($b['at'], $a['at']);
+            });
+        }
 
         /*
          * Every attachment on the ticket in one query, split by reply. The page
@@ -852,20 +917,12 @@ if (isset($_GET['ticket_id'])) {
                                                         <input type="text" class="form-control" inputmode="numeric" id="hours" name="hours" placeholder="Hrs" min="0" max="23" pattern="0?[0-9]|1[0-9]|2[0-3]" value="<?= $ticket_timer_hours ?>">
                                                         <input type="text" class="form-control" inputmode="numeric" id="minutes" name="minutes" placeholder="Mins" min="0" max="59" pattern="[0-5]?[0-9]" value="<?= $ticket_timer_minutes ?>">
                                                         <input type="text" class="form-control" inputmode="numeric" id="seconds" name="seconds" placeholder="Secs" min="0" max="59" pattern="[0-5]?[0-9]" value="<?= $ticket_timer_seconds ?>">
-                                                        <?php if ($config_ticket_timer_mode == 1) { ?>
-                                                            <?php if ($ticket_timer_running_id) { ?>
-                                                                <a class="btn btn-danger" href="post.php?stop_ticket_timer=<?= $ticket_timer_running_id ?>&csrf_token=<?= $_SESSION['csrf_token'] ?>" title="Clock out"><i class="fas fa-fw fa-stop me-2"></i>Clock out</a>
-                                                            <?php } else { ?>
-                                                                <a class="btn btn-light" href="post.php?start_ticket_timer=<?= $ticket_id ?>&csrf_token=<?= $_SESSION['csrf_token'] ?>" title="Clock in"><i class="fas fa-fw fa-hourglass-start me-2"></i>Clock in</a>
-                                                            <?php } ?>
-                                                        <?php } else { ?>
+                                                        <?php if ($config_ticket_timer_mode == 0) { ?>
                                                             <button type="button" class="btn btn-light" id="startStopTimer" title="Start / stop timer"><i class="fas fa-play"></i></button>
                                                             <button type="button" class="btn btn-light" id="resetTimer" title="Reset timer"><i class="fas fa-redo-alt"></i></button>
                                                         <?php } ?>
                                                     </div>
-                                                    <?php if ($config_ticket_timer_mode == 1 && $ticket_timer_running_id) { ?>
-                                                        <small class="text-secondary">Clocked in <span class="font-monospace" id="ticketClockElapsed" data-started-at="<?= $ticket_timer_started_at ?>" data-server-now="<?= date('Y-m-d H:i:s') ?>">00:00:00</span> ago<?php if ($ticket_timer_banked) { ?> &middot; <?= $ticket_timer_banked ?> already banked<?php } ?></small>
-                                                    <?php } elseif ($config_ticket_timer_mode == 1 && $ticket_timer_banked) { ?>
+                                                    <?php if ($config_ticket_timer_mode == 1 && $ticket_timer_banked) { ?>
                                                         <small class="text-secondary"><?= $ticket_timer_banked ?> clocked and ready to log</small>
                                                     <?php } ?>
                                                 </div>
@@ -906,6 +963,22 @@ if (isset($_GET['ticket_id'])) {
 
                 <?php
 
+                // The rail only appears where there are clock events to hang off it -
+                // a stopwatch install sees the conversation exactly as before.
+                $ticket_timeline = $config_ticket_timer_mode == 1 && (!empty($ticket_timer_events) || $ticket_has_running_timer);
+                $timer_event_index = 0;
+
+                if ($ticket_timeline) { ?>
+                    <div class="ticket-timeline">
+                <?php }
+
+                if ($ticket_timeline && $ticket_has_running_timer) { ?>
+                    <div class="ticket-timeline-event is-running">
+                        <span class="text-secondary">Running</span> &mdash;
+                        <span class="font-monospace ticket-timer-elapsed" data-elapsed-seconds="<?= $ticket_timer_running_seconds ?>"><?= sprintf("%02d:%02d:%02d", intdiv($ticket_timer_running_seconds, 3600), intdiv($ticket_timer_running_seconds % 3600, 60), $ticket_timer_running_seconds % 60) ?></span>
+                    </div>
+                <?php }
+
                 while ($reply_row = mysqli_fetch_assoc($sql_ticket_replies)) {
                     $ticket_reply_id = intval($reply_row['ticket_reply_id']);
                     $ticket_reply = $purifier->purify($reply_row['ticket_reply']);
@@ -927,6 +1000,13 @@ if (isset($_GET['ticket_id'])) {
                         $user_initials = initials($reply_row['user_name']);
                         $avatar_link = "../uploads/users/$user_id/$user_avatar";
                         $ticket_reply_time_worked = $reply_row['ticket_reply_time_worked'];
+                    }
+
+                    // Anything clocked since this reply belongs above it
+                    while ($ticket_timeline && $timer_event_index < count($ticket_timer_events)
+                        && strcmp($ticket_timer_events[$timer_event_index]['at'], $reply_row['ticket_reply_created_at']) > 0) {
+                        echo ticketTimelineEvent($ticket_timer_events[$timer_event_index]);
+                        $timer_event_index++;
                     }
 
                     // Internal notes are the one thing that must never be mistaken for
@@ -1032,11 +1112,64 @@ if (isset($_GET['ticket_id'])) {
 
                 }
 
+                // Everything older than the last reply - on a ticket with no replies at
+                // all this is the whole list
+                while ($ticket_timeline && $timer_event_index < count($ticket_timer_events)) {
+                    echo ticketTimelineEvent($ticket_timer_events[$timer_event_index]);
+                    $timer_event_index++;
+                }
+
+                if ($ticket_timeline) { ?>
+                    </div>
+                <?php }
+
                 ?>
 
             </div>
 
             <div class="col-lg-3">
+
+                <!-- Timer - clock in / clock out mode only. The stopwatch stays in the
+                     reply composer where it has always been. -->
+                <?php if ($config_ticket_timer_mode == 1 && !$ticket_is_closed) { ?>
+                    <div class="card mb-3">
+                        <div class="card-header px-3 py-2">
+                            <h5 class="card-title mt-1">
+                                <i class="fas fa-fw fa-hourglass-half me-2"></i>Timer
+                            </h5>
+                        </div>
+                        <div class="card-body text-center p-3">
+
+                            <div class="display-6 font-monospace<?php if ($ticket_timer_running_id) { echo " text-success ticket-timer-elapsed"; } else { echo " text-secondary"; } ?>" <?php if ($ticket_timer_running_id) { ?>data-elapsed-seconds="<?= $ticket_timer_elapsed_seconds ?>"<?php } ?>><?= $ticket_timer_elapsed_display ?></div>
+
+                            <div class="small text-secondary mb-3">
+                                <?php if ($ticket_timer_running_id) { ?>
+                                    Clocked in since <?= $ticket_timer_started_at_display ?>
+                                    <?php if ($ticket_timer_banked) { ?>
+                                        <br><?= $ticket_timer_banked ?> already banked
+                                    <?php } ?>
+                                <?php } elseif ($ticket_timer_banked) { ?>
+                                    Clocked and ready to log
+                                <?php } else { ?>
+                                    Not clocked in
+                                <?php } ?>
+                            </div>
+
+                            <?php if ($can_edit_ticket) { ?>
+                                <?php if ($ticket_timer_running_id) { ?>
+                                    <a class="btn btn-danger w-100" href="post.php?stop_ticket_timer=<?= $ticket_timer_running_id ?>&csrf_token=<?= $_SESSION['csrf_token'] ?>">
+                                        <i class="fas fa-fw fa-stop me-2"></i>Clock out
+                                    </a>
+                                <?php } else { ?>
+                                    <a class="btn btn-success w-100" href="post.php?start_ticket_timer=<?= $ticket_id ?>&csrf_token=<?= $_SESSION['csrf_token'] ?>">
+                                        <i class="fas fa-fw fa-play me-2"></i>Clock in
+                                    </a>
+                                <?php } ?>
+                            <?php } ?>
+
+                        </div>
+                    </div>
+                <?php } ?>
 
                 <!-- Tasks -->
                 <?php if (!$ticket_is_resolved || $task_count) { ?>
