@@ -969,13 +969,16 @@ if (isset($_GET['ticket_id'])) {
                 $timer_event_index = 0;
 
                 if ($ticket_timeline) { ?>
-                    <div class="ticket-timeline">
+                    <div class="timeline">
                 <?php }
 
                 if ($ticket_timeline && $ticket_has_running_timer) { ?>
-                    <div class="ticket-timeline-event is-running">
-                        <span class="text-secondary">Running</span> &mdash;
-                        <span class="font-monospace ticket-timer-elapsed" data-elapsed-seconds="<?= $ticket_timer_running_seconds ?>"><?= sprintf("%02d:%02d:%02d", intdiv($ticket_timer_running_seconds, 3600), intdiv($ticket_timer_running_seconds % 3600, 60), $ticket_timer_running_seconds % 60) ?></span>
+                    <div>
+                        <i class="timeline-icon fas fa-hourglass-half bg-secondary text-white"></i>
+                        <div class="timeline-event">
+                            <span class="text-secondary">Running</span> &mdash;
+                            <span class="font-monospace ticket-timer-elapsed" data-elapsed-seconds="<?= $ticket_timer_running_seconds ?>"><?= sprintf("%02d:%02d:%02d", intdiv($ticket_timer_running_seconds, 3600), intdiv($ticket_timer_running_seconds % 3600, 60), $ticket_timer_running_seconds % 60) ?></span>
+                        </div>
                     </div>
                 <?php }
 
@@ -1013,14 +1016,17 @@ if (isset($_GET['ticket_id'])) {
                     // something the client saw, so they get a label, not just a colour
                     if ($ticket_reply_type == 'Internal') {
                         $reply_border = 'dark';
+                        $reply_icon = 'lock';
                         $reply_badge = "<span class='badge bg-dark'><i class='fas fa-fw fa-lock me-1'></i>Internal note</span>";
                         $reply_group = 'internal';
                     } elseif ($ticket_reply_type == 'Client') {
                         $reply_border = 'warning';
+                        $reply_icon = 'reply';
                         $reply_badge = "<span class='badge bg-warning text-dark'><i class='fas fa-fw fa-reply me-1'></i>From client</span>";
                         $reply_group = 'public';
                     } else {
                         $reply_border = 'info';
+                        $reply_icon = 'comment';
                         $reply_badge = "<span class='badge bg-info text-dark'><i class='fas fa-fw fa-comment me-1'></i>Public reply</span>";
                         $reply_group = 'public';
                     }
@@ -1028,7 +1034,11 @@ if (isset($_GET['ticket_id'])) {
                     ?>
 
                     <!-- Begin ticket reply card -->
-                    <div class="card ticket-reply border-start border-<?= $reply_border ?> mb-3" style="border-start-width: 6px !important;" data-reply-group="<?= $reply_group ?>">
+                    <?php if ($ticket_timeline) { ?>
+                        <div>
+                        <i class="timeline-icon fas fa-<?= $reply_icon ?> bg-<?= $reply_border ?> text-white"></i>
+                    <?php } ?>
+                    <div class="card ticket-reply border-start border-<?= $reply_border ?><?php if ($ticket_timeline) { echo " timeline-item"; } else { echo " mb-3"; } ?>" style="border-start-width: 6px !important;" data-reply-group="<?= $reply_group ?>">
                         <div class="card-header px-3 py-2">
                             <div class="d-flex justify-content-between align-items-start w-100">
 
@@ -1106,6 +1116,9 @@ if (isset($_GET['ticket_id'])) {
                             <?php } ?>
                         </div>
                     </div>
+                    <?php if ($ticket_timeline) { ?>
+                        </div>
+                    <?php } ?>
                     <!-- End ticket reply card -->
 
                     <?php
@@ -1770,7 +1783,11 @@ require_once "../includes/footer.php";
             });
 
             document.querySelectorAll('.ticket-reply').forEach(card => {
-                card.hidden = wanted !== 'all' && card.dataset.replyGroup !== wanted;
+                // On the timeline the card sits in a wrapper that also carries its rail
+                // icon, so the wrapper is what hides - otherwise filtering leaves the
+                // icon behind against an empty stretch of rail.
+                const target = card.closest('.timeline > div') || card;
+                target.hidden = wanted !== 'all' && card.dataset.replyGroup !== wanted;
             });
         });
     }

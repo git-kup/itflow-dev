@@ -74,6 +74,11 @@ function ticketTimerStopRunning($ticket_id) {
 /*
  * One clock in / clock out entry on the ticket conversation timeline.
  *
+ * Built on AdminLTE's timeline component (libs/adminlte): a wrapper div holding a
+ * .timeline-icon, which the theme positions on the rail. A clock event is a line
+ * rather than a card, so it carries .timeline-event instead of .timeline-item -
+ * the card styling would make an event look like something somebody wrote.
+ *
  * Returns markup rather than echoing, matching slaPercentDisplay() and the other
  * display helpers. The event array is built by agent/ticket.php and its user name
  * is already escaped there, where the row is read.
@@ -84,14 +89,19 @@ function ticketTimelineEvent($event) {
 
     if ($event['type'] == 'in') {
         $label = 'Clocked in';
-        $state = 'is-in';
+        $icon = 'play';
+        $colour = 'success';
     } else {
         $label = 'Clocked out';
-        $state = 'is-out';
+        $icon = 'stop';
+        $colour = 'danger';
     }
 
-    return "<div class='ticket-timeline-event $state'>
-        <span class='text-secondary'>$label</span> &mdash; $when
-        <span class='text-secondary'>&middot; {$event['user']}</span>
+    return "<div>
+        <i class='timeline-icon fas fa-$icon bg-$colour text-white'></i>
+        <div class='timeline-event'>
+            <span class='text-secondary'>$label</span> &mdash; $when
+            <span class='text-secondary'>&middot; {$event['user']}</span>
+        </div>
     </div>";
 }
