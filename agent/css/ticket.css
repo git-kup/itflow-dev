@@ -87,3 +87,15 @@
 #replyTypePicker .btn-check:not(:checked) + .btn:hover {
     background-color: var(--bs-secondary-bg);
 }
+
+/*
+ * Conversation timeline - built on AdminLTE's .timeline component, which supplies
+ * the rail, the icon positions and the card offset. Only the bare event lines need
+ * anything extra: a clock in / clock out is a line rather than a card, so it has no
+ * .timeline-item to inherit the 60px offset that clears the rail.
+ */
+.timeline > div > .timeline-event {
+    padding: 0.35rem 0;
+    margin-left: 60px;
+    font-size: 0.875rem;
+}
