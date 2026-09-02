@@ -70,3 +70,28 @@ function ticketTimerStopRunning($ticket_id) {
         WHERE timer_ticket_id = $ticket_id
         AND timer_stopped_at IS NULL");
 }
+
+/*
+ * One clock in / clock out entry on the ticket conversation timeline.
+ *
+ * Returns markup rather than echoing, matching slaPercentDisplay() and the other
+ * display helpers. The event array is built by agent/ticket.php and its user name
+ * is already escaped there, where the row is read.
+ */
+function ticketTimelineEvent($event) {
+
+    $when = date('n/j/Y g:i A', strtotime($event['at']));
+
+    if ($event['type'] == 'in') {
+        $label = 'Clocked in';
+        $state = 'is-in';
+    } else {
+        $label = 'Clocked out';
+        $state = 'is-out';
+    }
+
+    return "<div class='ticket-timeline-event $state'>
+        <span class='text-secondary'>$label</span> &mdash; $when
+        <span class='text-secondary'>&middot; {$event['user']}</span>
+    </div>";
+}
