@@ -89,49 +89,13 @@
 }
 
 /*
- * Conversation timeline - the rail that clock in / clock out events hang off.
- *
- * Only rendered when the clock in / clock out timer is in use and the ticket has
- * events to show, so a stopwatch install keeps the plain stack of reply cards.
- * The rail is drawn on the container rather than per item so it runs unbroken
- * behind the reply cards between two events.
+ * Conversation timeline - built on AdminLTE's .timeline component, which supplies
+ * the rail, the icon positions and the card offset. Only the bare event lines need
+ * anything extra: a clock in / clock out is a line rather than a card, so it has no
+ * .timeline-item to inherit the 60px offset that clears the rail.
  */
-.ticket-timeline {
-    position: relative;
-    padding-left: 1.75rem;
-}
-
-.ticket-timeline::before {
-    content: "";
-    position: absolute;
-    left: 0.3rem;
-    top: 0.5rem;
-    bottom: 0.5rem;
-    width: 2px;
-    background-color: var(--bs-border-color);
-}
-
-.ticket-timeline-event {
-    position: relative;
-    padding: 0.4rem 0;
+.timeline > div > .timeline-event {
+    padding: 0.35rem 0;
+    margin-left: 60px;
     font-size: 0.875rem;
-}
-
-.ticket-timeline-event::before {
-    content: "";
-    position: absolute;
-    left: -1.6rem;
-    top: 0.75rem;
-    width: 0.7rem;
-    height: 0.7rem;
-    border-radius: 50%;
-    background-color: var(--bs-secondary);
-}
-
-.ticket-timeline-event.is-in::before {
-    background-color: var(--bs-success);
-}
-
-.ticket-timeline-event.is-out::before {
-    background-color: var(--bs-danger);
 }
