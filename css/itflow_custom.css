@@ -1568,3 +1568,21 @@ html {
 .client-header-toggle:hover .client-header-chevron {
     color: var(--bs-body-color);
 }
+
+/* --- Modal backdrop under reduced motion ----------------------------------
+   AdminLTE's prefers-reduced-motion block carries `.fade{opacity:1!important}`
+   so anything that would have faded in is simply visible straight away. The
+   modal backdrop is a .fade element too, but it is not content that fades in -
+   it is a tint that belongs at 50%. Caught by that rule it paints solid black,
+   so on any machine with animations turned off (a Windows RDS session, or
+   Settings > Accessibility > Visual effects > Animation effects switched off)
+   opening any modal blacks out the page behind it.
+
+   Only the backdrop is exempted, and only where it is already showing, so the
+   rest of the reduced-motion behaviour is untouched. The !important answers
+   AdminLTE's own; the extra classes win on specificity. */
+@media (prefers-reduced-motion: reduce) {
+    .modal-backdrop.fade.show {
+        opacity: var(--bs-backdrop-opacity) !important;
+    }
+}
