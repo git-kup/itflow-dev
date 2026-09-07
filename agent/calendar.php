@@ -3,12 +3,12 @@
 // If client_id is in URI then show client Side Bar and client header
 if (isset($_GET['client_id'])) {
     require_once "includes/inc_all_client.php";
-    $client_event_query = "WHERE event_client_id = $client_id";
+    $client_event_query = "WHERE 1 = 1 AND event_client_id = $client_id";
     $client_query = "WHERE 1 = 1 AND client_id = $client_id";
     $client_url = "&client_id=$client_id";
 } else {
     require_once "includes/inc_all.php";
-    $client_event_query = '';
+    $client_event_query = 'WHERE 1 = 1';
     $client_query = 'WHERE 1 = 1';
     $client_url = '';
 }
@@ -134,7 +134,7 @@ require_once "modals/calendar/calendar_event_add.php";
 
 //loop through IDs and create a modal for each
 $sql = mysqli_query($mysqli, "SELECT calendar_color, calendar_id, calendar_name, event_client_id, event_description, event_end,
-    event_id, event_location, event_repeat, event_start, event_title FROM calendar_events LEFT JOIN calendars ON event_calendar_id = calendar_id $client_event_query");
+    event_id, event_location, event_repeat, event_start, event_title FROM calendar_events LEFT JOIN calendars ON event_calendar_id = calendar_id $client_event_query " . clientScopeSql('event_client_id') . "");
 while ($row = mysqli_fetch_assoc($sql)) {
     $event_id = intval($row['event_id']);
     $event_title = escapeHtml($row['event_title']);
@@ -302,7 +302,7 @@ while ($row = mysqli_fetch_assoc($sql)) {
         events: [
             <?php
             $sql = mysqli_query($mysqli, "SELECT calendar_color, calendar_id, calendar_name, event_all_day, event_end, event_id,
-                event_repeat, event_start, event_title FROM calendar_events LEFT JOIN calendars ON event_calendar_id = calendar_id $client_event_query");
+                event_repeat, event_start, event_title FROM calendar_events LEFT JOIN calendars ON event_calendar_id = calendar_id $client_event_query " . clientScopeSql('event_client_id') . "");
 
             // Repeating events are stored as a single row, so the occurrences have to
             // be materialised here - the bundled FullCalendar build has no rrule
@@ -474,7 +474,7 @@ while ($row = mysqli_fetch_assoc($sql)) {
 
             if (!isset($_GET['client_id'])) {
                 //Clients Added
-                $sql = mysqli_query($mysqli, "SELECT client_created_at, client_id, client_name FROM clients");
+                $sql = mysqli_query($mysqli, "SELECT client_created_at, client_id, client_name FROM clients WHERE 1 = 1 " . clientScopeSql('client_id') . "");
                 while ($row = mysqli_fetch_assoc($sql)) {
                     $event_id = intval($row['client_id']);
                     $event_title = json_encode("Client: '" . $row['client_name'] . "' created");
